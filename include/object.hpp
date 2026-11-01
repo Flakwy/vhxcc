@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <istream>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -24,7 +25,7 @@ struct relocation {
         vhx32_pc_rels12,
         vhx32_abs32,
         vhx64_abs64
-    };
+    } type;
 
     std::string symbol;
     std::size_t offset;
@@ -36,6 +37,7 @@ struct section {
     std::vector<uint8_t> data;
     std::size_t alignment;
 
+    std::vector<std::string> symbols;
     std::vector<vhxcc::relocation> relocations;
 };
 
@@ -47,7 +49,9 @@ private:
 public:
     object() = default;
 
-    const section& section(const std::string& name, std::size_t alignment = 8) {
+    section& section(const std::string& name, std::size_t alignment = 8) {
+        if (_sections.contains(name))
+            return _sections.at(name);
         vhxcc::section section;
         section.name = name;
         section.alignment = alignment;
@@ -103,6 +107,103 @@ public:
         symbol.value = 0;
         _symbols.emplace(name, std::move(symbol));
         return _symbols.at(name);
+    }
+
+    object& operator<<(const vhxcc::object& object) {
+        // copy all sectionless symbols
+
+        for (const auto& elem : object._symbols) {
+            const vhxcc::symbol& symbol = elem.second;
+            if (symbol.section_name == "") {
+                _symbols.emplace(symbol.name, symbol);
+            }
+        }
+
+        // copy all sections
+
+        for (const auto& elem : object._sections) {
+            const vhxcc::section& section = elem.second;
+            if (!_sections.contains(section.name)) {
+                // simple copy for new sections
+                _sections.emplace(section.name, section);
+                for (const std::string& symbol_name : section.symbols) {
+                    if (object._symbols.contains(symbol_name)) {
+                        _symbols.emplace(symbol_name, object._symbols.at(symbol_name));
+                    }
+                }
+            } else {
+                // Inside the section merging branch of operator<<:
+
+                vhxcc::section& old = _sections.at(section.name);
+
+                // 1. Strictest alignment wins for the combined section
+                old.alignment = std::max(old.alignment, section.alignment);
+
+                // 2. Pad old.data so the incoming section starts at its required alignment boundary
+                std::size_t incoming_alignment = section.alignment;
+                std::size_t remainder = old.data.size() % incoming_alignment;
+                if (remainder != 0) {
+                    std::size_t padding = incoming_alignment - remainder;
+                    old.data.insert(old.data.end(), padding, 0);
+                }
+
+                // 3. Record the exact byte offset where the incoming section begins
+                std::size_t offset = old.data.size();
+
+                // 4. Append the raw bytes
+                old.data.insert(old.data.end(), section.data.cbegin(), section.data.cend());
+
+                // 5. Shift and copy symbols belonging to this section
+                for (const std::string& symbol_name : section.symbols) {
+                    if (object._symbols.contains(symbol_name)) {
+                        const vhxcc::symbol& _symbol = object._symbols.at(symbol_name);
+                        vhxcc::symbol symbol = _symbol;
+                        if (symbol.is_defined && !symbol.is_absolute) {
+                            symbol.value += offset; // Shift symbol by the alignment-adjusted offset
+                        }
+                        _symbols.emplace(symbol_name, symbol);
+                    }
+                    old.symbols.emplace_back(symbol_name);
+                }
+
+                // 6. Shift and copy relocations
+                for (const vhxcc::relocation& _reloc : section.relocations) {
+                    vhxcc::relocation reloc = _reloc;
+                    reloc.offset += offset; // Shift relocation offset by the same amount
+                    old.relocations.emplace_back(reloc);
+                }
+
+
+                // keep for tracking
+                // // append section onto existing section
+                // vhxcc::section& old = _sections.at(section.name);
+                // while ((old.data.size() + old.alignment) % section.alignment >= 1024)
+                //     old.data.insert(old.data.end(), 1024, 0);
+                // while ((old.data.size() + old.alignment) % section.alignment != 0)
+                //     old.data.push_back(0);
+                // std::size_t offset = old.data.size();
+                // std::size_t remainder = offset % section.alignment;
+                // if (remainder != 0)
+                //     old.data.insert(old.data.end(), remainder, 0);
+                // old.data.insert(old.data.end(), section.data.cbegin(), section.data.cend());
+                // for (const std::string& symbol_name : section.symbols) {
+                //     if (object._symbols.contains(symbol_name)) {
+                //         const vhxcc::symbol& _symbol = object._symbols.at(symbol_name);
+                //         vhxcc::symbol symbol = _symbol;
+                //         if (symbol.is_defined && !symbol.is_absolute)
+                //             symbol.value += offset;
+                //         _symbols.emplace(symbol_name, symbol);
+                //     }
+                //     old.symbols.emplace_back(symbol_name);
+                // }
+                // for (const vhxcc::relocation& _reloc : section.relocations) {
+                //     vhxcc::relocation reloc = _reloc;
+                //     reloc.offset += offset;
+                //     old.relocations.emplace_back(reloc);
+                // }
+            }
+        }
+        return *this;
     }
 };
 
