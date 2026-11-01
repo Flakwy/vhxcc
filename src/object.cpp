@@ -65,39 +65,41 @@ struct object_header {
 };
 
 struct section_header {
-    uint64_t index;
+    uint32_t index;
+    uint32_t flags;
     uint64_t name_off;
     uint64_t addr;
     uint64_t offset;
     uint64_t alignment;
     uint64_t size;
-    uint32_t flags;
 };
 
 struct reloc_header {
-    uint64_t section_index;
+    uint32_t section_index;
+    uint32_t type;
     uint64_t name_off;
     uint64_t offset;
     uint64_t addend;
-    uint32_t type;
 };
 
-#define REL_NONE 0
-#define REL_R_VHX_PC12 1
-#define REL_R_VHX_PCA8 2
-#define REL_R_VHX_PCS8 3
-#define REL_R_VHX_REL32 4
-#define REL_R_VHX_REL64 5
-#define REL_R_VHX_ABS32 6
-#define REL_R_VHX_ABS64 7
+#define REL_R_VHX_PC12 0
+#define REL_R_VHX_PCA8 1
+#define REL_R_VHX_PCS8 2
+#define REL_R_VHX_REL32 3
+#define REL_R_VHX_REL64 4
+#define REL_R_VHX_ABS32 5
+#define REL_R_VHX_ABS64 6
 
 struct symbol_header {
-    uint64_t section_index;
+    uint32_t section_index;
+    uint32_t flags;
     uint64_t name_off;
     uint64_t value;
-    uint32_t flags;
 };
 
+#define SYM_FLAG_GLOBAL 1
+#define SYM_FLAG_DEFINED 2
+#define SYM_FLAG_ABSOLUTE 4
 
 static vhxcc::object read_object_file(std::istream& stream) {
     std::size_t offset = stream.tellg();
@@ -146,4 +148,43 @@ static vhxcc::object read_object_file(std::istream& stream) {
     std::vector<reloc_header> relocs;
     std::vector<symbol_header> symbols;
     
+    stream.seekg(offset + header.sections_off, std::ios::beg);
+    sections.resize(header.sections_len / sizeof(section_header));
+    for (std::size_t i = 0; i < sections.size(); ++i) {
+        sections[i].index = read_little_endian<uint32_t>(stream);
+        sections[i].flags = read_little_endian<uint32_t>(stream);
+        sections[i].name_off = read_value(stream);
+        sections[i].offset = read_value(stream);
+        sections[i].alignment = read_value(stream);
+        sections[i].size = read_value(stream);
+    }
+
+    stream.seekg(offset + header.relocs_off, std::ios::beg);
+    relocs.resize(header.relocs_len / sizeof(reloc_header));
+    for (std::size_t i = 0; i < relocs.size(); ++i) {
+        relocs[i].section_index = read_value(stream);
+        relocs[i].type = read_little_endian<uint32_t>(stream);
+        relocs[i].offset = read_value(stream);
+        relocs[i].addend = read_value(stream);
+    }
+
+    stream.seekg(offset + header.symbols_off, std::ios::beg);
+    symbols.resize(header.symbols_len / sizeof(symbol_header));
+    for (std::size_t i = 0; i < symbols.size(); ++i) {
+        symbols[i].name_off = read_value(stream);
+        symbols[i].flags = read_little_endian<uint32_t>(stream);
+        symbols[i].section_index = read_value(stream);
+        symbols[i].value = read_value(stream);
+    }
+
+    // Map sections by their index
+    std::unordered_map<uint32_t, section_header> section_map;
+    for (const auto& section : sections) {
+        section_map[section.index] = section;
+    }
+
+    // Populate object sections
+    for (const auto& section : sections) {
+        
+    }
 }
