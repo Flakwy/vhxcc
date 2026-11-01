@@ -1,0 +1,6 @@
+{
+    "clangd.fallbackFlags": [
+        "-std=c++26",
+        "-I${workspaceFolder}/include"
+    ]
+}

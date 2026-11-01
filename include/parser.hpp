@@ -1,6 +1,6 @@
 #pragma once
 
-#include "lexer.hpp"
+#include <lexer.hpp>
 #include <initializer_list>
 #include <string>
 #include <unordered_set>
@@ -82,7 +82,7 @@ public:
         };
 
         type type;
-        token token;
+        vhxcc::token token;
         std::vector<expression> branches;
 
         operator bool() const {

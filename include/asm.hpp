@@ -1,7 +1,7 @@
 #pragma once
 
-#include "lexer.hpp"
-#include "parser.hpp"
+#include <lexer.hpp>
+#include <parser.hpp>
 
 namespace vhxcc {
 
