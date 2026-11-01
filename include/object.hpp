@@ -132,6 +132,8 @@ public:
     }
 
     const vhxcc::symbol& require(const std::string& name) {
+        if (_symbols.contains(name))
+            return _symbols.at(name);
         vhxcc::symbol symbol;
         symbol.name = name;
         symbol.is_global = true;
@@ -141,6 +143,28 @@ public:
         symbol.value = 0;
         _symbols.emplace(name, std::move(symbol));
         return _symbols.at(name);
+    }
+
+    const vhxcc::relocation& relocation(const std::string& section_name, const std::string& symbol_name, enum vhxcc::relocation::type type) {
+        vhxcc::section& section = this->section(section_name);
+        vhxcc::relocation relocation;
+        relocation.type = type;
+        relocation.symbol = symbol_name;
+        relocation.offset = section.data.size();
+        relocation.addend = 0;
+        section.relocations.emplace_back(std::move(relocation));
+        return section.relocations.back();
+    }
+
+    const vhxcc::relocation& relocation(const std::string& section_name, const std::string& symbol_name, enum vhxcc::relocation::type type, std::size_t offset, std::size_t addend = 0) {
+        vhxcc::section& section = this->section(section_name);
+        vhxcc::relocation relocation;
+        relocation.type = type;
+        relocation.symbol = symbol_name;
+        relocation.offset = offset;
+        relocation.addend = addend;
+        section.relocations.emplace_back(std::move(relocation));
+        return section.relocations.back();
     }
 
     object& append(const std::string& section_name, const std::vector<uint8_t>& data) {
