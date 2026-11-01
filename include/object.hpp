@@ -2,6 +2,8 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <istream>
+#include <ostream>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -47,6 +49,14 @@ private:
 
 public:
     object() = default;
+
+    object(std::istream&);
+    
+    object& write(std::ostream&) const;
+    object& read(std::istream&);
+
+    object& operator<<(std::istream&);
+    friend std::ostream& operator<<(std::ostream&, const object&);
 
     vhxcc::section& section(const std::string& name, std::size_t alignment) {
         if (_sections.contains(name)) {
