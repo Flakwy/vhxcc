@@ -2,7 +2,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <istream>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -49,12 +48,37 @@ private:
 public:
     object() = default;
 
-    section& section(const std::string& name, std::size_t alignment = 8) {
-        if (_sections.contains(name))
-            return _sections.at(name);
+    vhxcc::section& section(const std::string& name, std::size_t alignment) {
+        if (_sections.contains(name)) {
+            vhxcc::section& old = _sections.at(name);
+
+            // 1. Strictest alignment wins for the combined section
+            old.alignment = std::max(old.alignment, alignment);
+
+            // 2. Pad old.data so the incoming section starts at its required alignment boundary
+            std::size_t incoming_alignment = alignment;
+            std::size_t remainder = old.data.size() % incoming_alignment;
+            if (remainder != 0) {
+                std::size_t padding = incoming_alignment - remainder;
+                old.data.insert(old.data.end(), padding, 0);
+            }
+
+            return old;
+        }
         vhxcc::section section;
         section.name = name;
         section.alignment = alignment;
+        _sections.emplace(name, std::move(section));
+        return _sections.at(name);
+    }
+
+    vhxcc::section& section(const std::string& name) {
+        if (_sections.contains(name)) {
+            return _sections.at(name);
+        }
+        vhxcc::section section;
+        section.name = name;
+        section.alignment = 16; // default alignment
         _sections.emplace(name, std::move(section));
         return _sections.at(name);
     }
@@ -107,6 +131,18 @@ public:
         symbol.value = 0;
         _symbols.emplace(name, std::move(symbol));
         return _symbols.at(name);
+    }
+
+    object& append(const std::string& section_name, const std::vector<uint8_t>& data) {
+        vhxcc::section& old = this->section(section_name);
+        old.data.insert(old.data.end(), data.cbegin(), data.cend());
+        return *this;
+    }
+
+    object& append(const std::string& section_name, const std::vector<uint8_t>& data, std::size_t alignment) {
+        vhxcc::section& old = this->section(section_name, alignment);
+        old.data.insert(old.data.end(), data.cbegin(), data.cend());
+        return *this;
     }
 
     object& operator<<(const vhxcc::object& object) {
