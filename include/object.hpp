@@ -21,11 +21,13 @@ struct symbol {
 
 struct relocation {
     enum type {
-        vhx32_pc_rel12,
-        vhx32_pc_rela12,
-        vhx32_pc_rels12,
-        vhx32_abs32,
-        vhx64_abs64
+        vhx_pc12,
+        vhx_pca8,
+        vhx_pcs8,
+        vhx_rel32,
+        vhx_rel64,
+        vhx_abs32,
+        vhx_abs64
     } type;
 
     std::string symbol;
@@ -35,6 +37,7 @@ struct relocation {
 
 struct section {
     std::string name;
+    std::size_t virt_addr;
     std::vector<uint8_t> data;
     std::size_t alignment;
 
