@@ -272,35 +272,6 @@ public:
                     reloc.offset += offset; // Shift relocation offset by the same amount
                     old.relocations.emplace_back(reloc);
                 }
-
-
-                // keep for tracking
-                // // append section onto existing section
-                // vhxcc::section& old = _sections.at(section.name);
-                // while ((old.data.size() + old.alignment) % section.alignment >= 1024)
-                //     old.data.insert(old.data.end(), 1024, 0);
-                // while ((old.data.size() + old.alignment) % section.alignment != 0)
-                //     old.data.push_back(0);
-                // std::size_t offset = old.data.size();
-                // std::size_t remainder = offset % section.alignment;
-                // if (remainder != 0)
-                //     old.data.insert(old.data.end(), remainder, 0);
-                // old.data.insert(old.data.end(), section.data.cbegin(), section.data.cend());
-                // for (const std::string& symbol_name : section.symbols) {
-                //     if (object._symbols.contains(symbol_name)) {
-                //         const vhxcc::symbol& _symbol = object._symbols.at(symbol_name);
-                //         vhxcc::symbol symbol = _symbol;
-                //         if (symbol.is_defined && !symbol.is_absolute)
-                //             symbol.value += offset;
-                //         _symbols.emplace(symbol_name, symbol);
-                //     }
-                //     old.symbols.emplace_back(symbol_name);
-                // }
-                // for (const vhxcc::relocation& _reloc : section.relocations) {
-                //     vhxcc::relocation reloc = _reloc;
-                //     reloc.offset += offset;
-                //     old.relocations.emplace_back(reloc);
-                // }
             }
         }
         return *this;
