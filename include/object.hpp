@@ -44,7 +44,7 @@ struct section {
 
 class object {
 private:
-    std::unordered_map<std::string, section> _sections;
+    std::unordered_map<std::string, vhxcc::section> _sections;
     std::unordered_map<std::string, symbol> _symbols;
     std::string _platform = "none";
     std::string _arch = "vhx32i";

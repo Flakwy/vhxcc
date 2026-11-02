@@ -1,5 +1,6 @@
 #pragma once
 #include <cerrno>
+#include <cstdio>
 #include <filesystem>
 #include <format>
 #include <fstream>
@@ -18,9 +19,9 @@ namespace vhxcc {
 
 struct position {
     std::string file;
-    size_t offset;
-    size_t line;
-    size_t column;
+    std::size_t offset;
+    std::size_t line;
+    std::size_t column;
 
     bool operator==(const position& rhs) const {
         return (file == rhs.file) && (offset == rhs.offset);
@@ -196,13 +197,21 @@ class source {
     struct file_source {
         std::string path;
         std::string source;
-        size_t line;
-        size_t column;
+        std::size_t line;
+        std::size_t column;
     };
 
     std::vector<file_source> _source;
 
 public:
+    struct file {
+        std::string path;
+        std::size_t line;
+        std::size_t column;
+        file(const std::string& path, std::size_t line, std::size_t column) :
+            path(path), line(line), column(column) {}
+    };
+
     static constexpr int eof = -1;
 
     source& operator=(const source&) = delete;
@@ -220,12 +229,26 @@ public:
 
     ~source() = default;
 
-    void append(const std::string& source) {
-        file_source file {"string", source, 1, 1};
-        _source.push_back(file);
+    source& append(char c) {
+        if (_source.size() == 0) {
+            file_source file {"string", "", 1, 1};
+            _source.push_back(file);
+        }
+        _source.back().source += c;
+        return *this;
     }
 
-    void append(std::filesystem::path path) {
+    source& append(const std::string& source) {
+        if (_source.size() == 0) {
+            file_source file {"string", source, 1, 1};
+            _source.push_back(file);
+        } else {
+            _source.back().source += source;
+        }
+        return *this;
+    }
+
+    source& append(std::filesystem::path path) {
         std::ifstream handle(path);
         if (!handle.is_open())
             throw std::filesystem::filesystem_error("could not open file", path, std::make_error_code(static_cast<std::errc>(errno)));
@@ -238,20 +261,37 @@ public:
         file.line = 1;
         file.column = 1;
         _source.push_back(file);
+        return *this;
     }
 
-    void append(const source& other) {
+    source& append(const source& other) {
         _source.insert(_source.end(), other._source.cbegin(), other._source.cend());
+        return *this;
+    }
+
+    source& append(const source::file& file) {
+        file_source source;
+        source.path = file.path;
+        source.source = "";
+        source.line = file.line;
+        source.column = file.column;
+        _source.push_back(source);
+        return *this;
+    }
+
+    template <typename T>
+    source& operator<<(const T& rhs) {
+        return this->append(rhs);
     }
 
     class iterator {
     private:
         const source* _source;
-        size_t _index;
+        std::size_t _index;
         position _pos;
 
         iterator() = delete;
-        iterator(const source& source, size_t index) : _source(&source), _index(index) {
+        iterator(const source& source, std::size_t index) : _source(&source), _index(index) {
             _pos.offset = 0;
             if (_index >= _source->_source.size()) {
                 _pos.file = "<eof>";
@@ -653,9 +693,9 @@ public:
 
     class iterator {
         const lexer* _lexer;
-        size_t _index;
+        std::size_t _index;
 
-        iterator(const lexer& lexer, size_t index = 0) : _lexer(&lexer), _index(index) {}
+        iterator(const lexer& lexer, std::size_t index = 0) : _lexer(&lexer), _index(index) {}
 
     public:
         const token& operator*() const {

@@ -6,36 +6,36 @@ SDIR     := src
 IDIR     := include
 BDIR     := build
 
-CFLAGS   := -Wall -Wextra -O2 -fPIC -I$(IDIR) -MMD -MP
-CCFLAGS  := $(CFLAGS) -std=c20
-CXXFLAGS := $(CFLAGS) -std=c++20
+CFLAGS   := -Wall -Wextra -O2 -I$(IDIR) -MMD -MP
+CCFLAGS  := $(CFLAGS) -std=c26
+CXXFLAGS := $(CFLAGS) -std=c++26
 
-# 1. Grab the raw filenames from src/ using wildcard
 SRCS_C   := $(wildcard $(SDIR)/*.c)
 SRCS_CXX := $(wildcard $(SDIR)/*.cpp)
 
-# 2. Transform them so the object files are mapped to the build/ directory
 OBJS_C   := $(patsubst $(SDIR)/%.c,$(BDIR)/%.o,$(SRCS_C))
 OBJS_CXX := $(patsubst $(SDIR)/%.cpp,$(BDIR)/%.o,$(SRCS_CXX))
 OBJS     := $(OBJS_C) $(OBJS_CXX)
 DEPS     := $(OBJS:.o=.d)
 
-# Target library name
-TARGET   := vhxcc
+TARGET_CC   := vhx-cc
+TARGET_AS	:= vhx-as
 
-# Default target
+AS_OBJS	 := $(filter-out $(BDIR)/vhx-cc.o, $(OBJS))
+CC_OBJS	 := $(filter-out $(BDIR)/vhx-as.o, $(OBJS))
+
 .PHONY: all
-all: $(TARGET)
+all: $(TARGET_CC) $(TARGET_AS)
 
-# Link object files to create the shared library
-$(TARGET): $(OBJS)
+$(TARGET_AS): $(AS_OBJS)
 	$(CXX) $(LDFLAGS) -o $@ $^
 
-# Rule to compile C++ files into the build directory
+$(TARGET_CC): $(CC_OBJS) | $(TARGET_AS)
+	$(CXX) $(LDFLAGS) -o $@ $^
+
 $(BDIR)/%.o: $(SDIR)/%.cpp | $(BDIR)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
-# Rule to compile C files into the build directory
 $(BDIR)/%.o: $(SDIR)/%.c | $(BDIR)
 	$(CC) $(CCFLAGS) -c $< -o $@
 
@@ -48,4 +48,4 @@ $(BDIR):
 # Clean up build artifacts
 .PHONY: clean
 clean:
-	rm -rf $(BDIR) $(TARGET)
+	rm -rf $(BDIR) $(TARGET_AS) $(TARGET_CC)
