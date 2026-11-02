@@ -11,8 +11,7 @@
 namespace vhxcc {
 
 struct symbol {
-    std::string name;
-    std::string section_name;
+    std::string section;
     std::size_t value;
     bool is_global;
     bool is_defined;
@@ -36,9 +35,8 @@ struct relocation {
 };
 
 struct section {
-    std::string name;
     std::size_t virt_addr;
-    std::vector<uint8_t> data;
+    std::vector<char> data;
     std::size_t alignment;
 
     std::vector<std::string> symbols;
@@ -49,17 +47,28 @@ class object {
 private:
     std::unordered_map<std::string, section> _sections;
     std::unordered_map<std::string, symbol> _symbols;
+    std::string _platform = "none";
+    std::string _arch = "vhx32i";
+    std::size_t _entry = 0;
 
 public:
     object() = default;
 
     object(std::istream&);
     
-    object& write(std::ostream&) const;
+    object& write(std::ostream&);
     object& read(std::istream&);
 
     object& operator<<(std::istream&);
     friend std::ostream& operator<<(std::ostream&, const object&);
+
+    const std::string& platform() const { return _platform; }
+    const std::string& arch() const { return _arch; }
+    std::size_t entry() const { return _entry; }
+
+    const std::string& platform(const std::string& platform) { _platform = platform; return _platform; }
+    const std::string& arch(const std::string& arch) { _arch = arch; return _arch; }
+    std::size_t entry(std::size_t entry) { _entry = entry; return _entry; }
 
     vhxcc::section& section(const std::string& name, std::size_t alignment) {
         if (_sections.contains(name)) {
@@ -79,7 +88,6 @@ public:
             return old;
         }
         vhxcc::section section;
-        section.name = name;
         section.alignment = alignment;
         _sections.emplace(name, std::move(section));
         return _sections.at(name);
@@ -90,19 +98,28 @@ public:
             return _sections.at(name);
         }
         vhxcc::section section;
-        section.name = name;
         section.alignment = 16; // default alignment
         _sections.emplace(name, std::move(section));
         return _sections.at(name);
     }
 
+    const vhxcc::symbol& define(const std::string& name, bool global = false) {
+        vhxcc::symbol symbol;
+        symbol.is_global = global;
+        symbol.is_defined = false;
+        symbol.is_absolute = false;
+        symbol.section = "";
+        symbol.value = 0;
+        _symbols.emplace(name, std::move(symbol));
+        return _symbols.at(name);
+    }
+
     const vhxcc::symbol& define(const std::string& name, std::size_t value, bool global = false) {
         vhxcc::symbol symbol;
-        symbol.name = name;
         symbol.is_global = global;
         symbol.is_defined = true;
         symbol.is_absolute = true;
-        symbol.section_name = "";
+        symbol.section = "";
         symbol.value = value;
         _symbols.emplace(name, std::move(symbol));
         return _symbols.at(name);
@@ -111,24 +128,22 @@ public:
     const vhxcc::symbol& define(const std::string& section_name, const std::string& name, bool global = false) {
         const vhxcc::section& section = this->section(section_name);
         vhxcc::symbol symbol;
-        symbol.name = name;
         symbol.is_global = global;
-        symbol.is_defined = true;
+        symbol.is_defined = false;
         symbol.is_absolute = false;
-        symbol.section_name = section_name;
+        symbol.section = section_name;
         symbol.value = section.data.size();
         _symbols.emplace(name, std::move(symbol));
         return _symbols.at(name);
     }
 
-    const vhxcc::symbol& define(const std::string& section_name, std::size_t offset, const std::string& name, bool global = false) {
+    const vhxcc::symbol& define(const std::string& section_name, const std::string& name, std::size_t offset, bool global = false) {
         const vhxcc::section& section = this->section(section_name);
         vhxcc::symbol symbol;
-        symbol.name = name;
         symbol.is_global = global;
         symbol.is_defined = true;
         symbol.is_absolute = false;
-        symbol.section_name = section_name;
+        symbol.section = section_name;
         symbol.value = offset;
         _symbols.emplace(name, std::move(symbol));
         return _symbols.at(name);
@@ -138,11 +153,10 @@ public:
         if (_symbols.contains(name))
             return _symbols.at(name);
         vhxcc::symbol symbol;
-        symbol.name = name;
         symbol.is_global = true;
         symbol.is_defined = false;
         symbol.is_absolute = false;
-        symbol.section_name = "";
+        symbol.section = "";
         symbol.value = 0;
         _symbols.emplace(name, std::move(symbol));
         return _symbols.at(name);
@@ -170,13 +184,25 @@ public:
         return section.relocations.back();
     }
 
-    object& append(const std::string& section_name, const std::vector<uint8_t>& data) {
+    object& append(const std::string& section_name, const std::vector<char>& data) {
         vhxcc::section& old = this->section(section_name);
         old.data.insert(old.data.end(), data.cbegin(), data.cend());
         return *this;
     }
 
-    object& append(const std::string& section_name, const std::vector<uint8_t>& data, std::size_t alignment) {
+    object& append(const std::string& section_name, const std::vector<char>& data, std::size_t alignment) {
+        vhxcc::section& old = this->section(section_name, alignment);
+        old.data.insert(old.data.end(), data.cbegin(), data.cend());
+        return *this;
+    }
+
+    object& append(const std::string& section_name, const std::string& data) {
+        vhxcc::section& old = this->section(section_name);
+        old.data.insert(old.data.end(), data.cbegin(), data.cend());
+        return *this;
+    }
+
+    object& append(const std::string& section_name, const std::string& data, std::size_t alignment) {
         vhxcc::section& old = this->section(section_name, alignment);
         old.data.insert(old.data.end(), data.cbegin(), data.cend());
         return *this;
@@ -186,19 +212,21 @@ public:
         // copy all sectionless symbols
 
         for (const auto& elem : object._symbols) {
+            const std::string& symbol_name = elem.first;
             const vhxcc::symbol& symbol = elem.second;
-            if (symbol.section_name == "") {
-                _symbols.emplace(symbol.name, symbol);
+            if (symbol.section == "") {
+                _symbols.emplace(symbol_name, symbol);
             }
         }
 
         // copy all sections
 
         for (const auto& elem : object._sections) {
+            const std::string& section_name = elem.first;
             const vhxcc::section& section = elem.second;
-            if (!_sections.contains(section.name)) {
+            if (!_sections.contains(section_name)) {
                 // simple copy for new sections
-                _sections.emplace(section.name, section);
+                _sections.emplace(section_name, section);
                 for (const std::string& symbol_name : section.symbols) {
                     if (object._symbols.contains(symbol_name)) {
                         _symbols.emplace(symbol_name, object._symbols.at(symbol_name));
@@ -207,7 +235,7 @@ public:
             } else {
                 // Inside the section merging branch of operator<<:
 
-                vhxcc::section& old = _sections.at(section.name);
+                vhxcc::section& old = _sections.at(section_name);
 
                 // 1. Strictest alignment wins for the combined section
                 old.alignment = std::max(old.alignment, section.alignment);
@@ -277,6 +305,14 @@ public:
             }
         }
         return *this;
+    }
+
+    const std::unordered_map<std::string, vhxcc::section>& sections() const {
+        return _sections;
+    }
+
+    const std::unordered_map<std::string, vhxcc::symbol>& symbols() const {
+        return _symbols;
     }
 };
 
