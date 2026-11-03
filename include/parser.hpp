@@ -121,7 +121,14 @@ private:
             rhs.branches.push_back(parse_assign(it, typenames));
             lhs = std::move(rhs);
         }
-
+        if (lhs.type == expression::none) {
+            return parser::none;
+        }
+        for (auto& branch : lhs.branches) {
+            if (branch.type == expression::none) {
+                return parser::none;
+            }
+        }
         return lhs;
     }
 
@@ -134,6 +141,14 @@ private:
             rhs.branches.push_back(std::move(lhs));
             rhs.branches.push_back(parse_land(it, typenames));
             lhs = std::move(rhs);
+        }
+        if (lhs.type == expression::none) {
+            return parser::none;
+        }
+        for (auto& branch : lhs.branches) {
+            if (branch.type == expression::none) {
+                return parser::none;
+            }
         }
         return lhs;
     }
@@ -148,6 +163,14 @@ private:
             rhs.branches.push_back(parse_or(it, typenames));
             lhs = std::move(rhs);
         }
+        if (lhs.type == expression::none) {
+            return parser::none;
+        }
+        for (auto& branch : lhs.branches) {
+            if (branch.type == expression::none) {
+                return parser::none;
+            }
+        }
         return lhs;
     }
 
@@ -160,6 +183,14 @@ private:
             rhs.branches.push_back(std::move(lhs));
             rhs.branches.push_back(parse_xor(it, typenames));
             lhs = std::move(rhs);
+        }
+        if (lhs.type == expression::none) {
+            return parser::none;
+        }
+        for (auto& branch : lhs.branches) {
+            if (branch.type == expression::none) {
+                return parser::none;
+            }
         }
         return lhs;
     }
@@ -174,6 +205,14 @@ private:
             rhs.branches.push_back(parse_and(it, typenames));
             lhs = std::move(rhs);
         }
+        if (lhs.type == expression::none) {
+            return parser::none;
+        }
+        for (auto& branch : lhs.branches) {
+            if (branch.type == expression::none) {
+                return parser::none;
+            }
+        }
         return lhs;
     }
 
@@ -186,6 +225,14 @@ private:
             rhs.branches.push_back(std::move(lhs));
             rhs.branches.push_back(parse_equal(it, typenames));
             lhs = std::move(rhs);
+        }
+        if (lhs.type == expression::none) {
+            return parser::none;
+        }
+        for (auto& branch : lhs.branches) {
+            if (branch.type == expression::none) {
+                return parser::none;
+            }
         }
         return lhs;
     }
@@ -200,6 +247,14 @@ private:
             rhs.branches.push_back(parse_compare(it, typenames));
             lhs = std::move(rhs);
         }
+        if (lhs.type == expression::none) {
+            return parser::none;
+        }
+        for (auto& branch : lhs.branches) {
+            if (branch.type == expression::none) {
+                return parser::none;
+            }
+        }
         return lhs;
     }
 
@@ -212,6 +267,14 @@ private:
             rhs.branches.push_back(std::move(lhs));
             rhs.branches.push_back(parse_shift(it, typenames));
             lhs = std::move(rhs);
+        }
+        if (lhs.type == expression::none) {
+            return parser::none;
+        }
+        for (auto& branch : lhs.branches) {
+            if (branch.type == expression::none) {
+                return parser::none;
+            }
         }
         return lhs;
     }
@@ -226,6 +289,14 @@ private:
             rhs.branches.push_back(parse_addition(it, typenames));
             lhs = std::move(rhs);
         }
+        if (lhs.type == expression::none) {
+            return parser::none;
+        }
+        for (auto& branch : lhs.branches) {
+            if (branch.type == expression::none) {
+                return parser::none;
+            }
+        }
         return lhs;
     }
 
@@ -239,6 +310,14 @@ private:
             rhs.branches.push_back(parse_multiplication(it, typenames));
             lhs = std::move(rhs);
         }
+        if (lhs.type == expression::none) {
+            return parser::none;
+        }
+        for (auto& branch : lhs.branches) {
+            if (branch.type == expression::none) {
+                return parser::none;
+            }
+        }
         return lhs;
     }
 
@@ -251,6 +330,14 @@ private:
             rhs.branches.push_back(std::move(lhs));
             rhs.branches.push_back(parse_prefix(it, typenames));
             lhs = std::move(rhs);
+        }
+        if (lhs.type == expression::none) {
+            return parser::none;
+        }
+        for (auto& branch : lhs.branches) {
+            if (branch.type == expression::none) {
+                return parser::none;
+            }
         }
         return lhs;
     }
@@ -277,10 +364,17 @@ private:
                     node.token = tok;
                     node.branches.push_back(type_val);
                     node.branches.push_back(parse_prefix(it, typenames));
+                    if (node.type == expression::none) {
+                        return parser::none;
+                    }
+                    for (auto& branch : node.branches) {
+                        if (branch.type == expression::none) {
+                            return parser::none;
+                        }
+                    }
                     return node;
                 }
             }
-            it = old;
             return parse_postfix(it, typenames);
         }
     }
@@ -334,6 +428,15 @@ private:
             } 
             else {
                 break;
+            }
+        }
+        // check if any is none
+        if (expr.type == expression::none) {
+            return parser::none;
+        }
+        for (auto& branch : expr.branches) {
+            if (branch.type == expression::none) {
+                return parser::none;
             }
         }
         return expr;
@@ -458,7 +561,25 @@ private:
 public:
 
     static expression parse_expression(lexer::iterator& it, const parser::typenames& typenames = {}) {
-        return parse_assign(it, typenames);
+        lexer::iterator old = it;
+        expression expr = parse_assign(it, typenames);
+        if (expr.type == expression::none) {
+            it = old;
+        }
+        return expr;
+    }
+
+    static expression expect_expression(lexer::iterator& it, const char* message, const parser::typenames& typenames = {}) {
+        lexer::iterator old = it;
+        expression expr = parse_assign(it, typenames);
+        if (expr.type == expression::none) {
+            throw vhxcc::compile_error(message, *old);
+        }
+        return expr;
+    }
+
+    static expression exprect_expression(lexer::iterator& it, const parser::typenames& typenames = {}) {
+        return expect_expression(it, "expected expression", typenames);
     }
 };
 

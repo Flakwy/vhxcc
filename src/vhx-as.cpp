@@ -137,6 +137,8 @@ int main(int argc, const char *argv[]) {
                 // Set the entry point
                 opts.entry = entry;
             }
+        } else if (arg[0] == '-') {
+            std::cerr << BOLD << "vhx-as:" << RED << " error:" << RESET << " unknown option '" << arg << "'" << std::endl;
         } else {
             // Handle input file
             opts.inputs.push_back(arg);
@@ -170,7 +172,7 @@ int main(int argc, const char *argv[]) {
         do {
             ast child;
             child.type = ast::type::expression;
-            vhxcc::parser::expression expr = vhxcc::parser::parse_expression(it);
+            vhxcc::parser::expression expr = vhxcc::parser::expect_expression(it);
             child.expr = expr;
             node.children.push_back(child);
         } while (lexer::match(it, vhxcc::token::comma));
@@ -179,12 +181,19 @@ int main(int argc, const char *argv[]) {
 
     directives["byte"] = simple_data;
     directives["half"] = simple_data;
+    directives["hword"] = simple_data;
     directives["word"] = simple_data;
     directives["dword"] = simple_data;
     directives["qword"] = simple_data;
+    directives["quad"] = simple_data;
     directives["ascii"] = simple_data;
     directives["asciz"] = simple_data;
-    directives["space"] = simple_data;
+    directives["string"] = simple_data;
+    directives["short"] = simple_data;
+    directives["int"] = simple_data;
+    directives["long"] = simple_data;
+    directives["float"] = simple_data;
+    directives["double"] = simple_data;
 
     auto one_argument = [](const std::string& name, vhxcc::lexer::iterator& it) -> ast {
         ast node;
@@ -192,7 +201,7 @@ int main(int argc, const char *argv[]) {
         node.type = ast::type::directive;
         ast child;
         child.type = ast::type::expression;
-        vhxcc::parser::expression expr = vhxcc::parser::parse_expression(it);
+        vhxcc::parser::expression expr = vhxcc::parser::expect_expression(it);
         child.expr = expr;
         node.children.push_back(child);
         return node;
@@ -200,7 +209,20 @@ int main(int argc, const char *argv[]) {
 
     directives["org"] = one_argument;
     directives["align"] = one_argument;
+    directives["balign"] = one_argument;
     directives["offset"] = one_argument;
+    directives["if"] = one_argument;
+
+    auto no_argument = [](const std::string& name, vhxcc::lexer::iterator& it) -> ast {
+        ast node;
+        node.name = name;
+        node.type = ast::type::directive;
+        return node;
+    };
+
+    directives["else"] = no_argument;
+    directives["endif"] = no_argument;
+    directives["err"] = no_argument;
 
     auto one_string_argument = [](const std::string& name, vhxcc::lexer::iterator& it) -> ast {
         ast node;
@@ -216,6 +238,26 @@ int main(int argc, const char *argv[]) {
     directives["section"] = one_string_argument;
     directives["include"] = one_string_argument;
     directives["incbin"] = one_string_argument;
+    directives["file"] = one_string_argument;
+
+    auto one_number_argument = [](const std::string& name, vhxcc::lexer::iterator& it) -> ast {
+        ast node;
+        node.name = name;
+        node.type = ast::type::directive;
+        ast child;
+        child.type = ast::type::expression;
+        vhxcc::token tok = lexer::expect(it, vhxcc::token::integer_literal);
+        child.name = tok.lexeme();
+        vhxcc::parser::expression expr;
+        expr.type = vhxcc::parser::expression::literal;
+        expr.token = tok;
+        child.expr = expr;
+        node.children.push_back(child);
+        return node;
+    };
+
+    directives["ln"] = one_number_argument;
+    directives["line"] = one_number_argument;
 
     auto one_identifier_argument = [](const std::string& name, vhxcc::lexer::iterator& it) -> ast {
         ast node;
@@ -229,7 +271,118 @@ int main(int argc, const char *argv[]) {
     };
 
     directives["global"] = one_identifier_argument;
+    directives["globl"] = one_identifier_argument;
     directives["extern"] = one_identifier_argument;
+    directives["ifdef"] = one_identifier_argument;
+    directives["ifndef"] = one_identifier_argument;
+    // for GNU as compatibility
+    directives["ifnotdef"] = one_identifier_argument;
+
+    auto one_identifier_and_expression_argument = [](const std::string& name, vhxcc::lexer::iterator& it) -> ast {
+        ast node;
+        node.name = name;
+        node.type = ast::type::directive;
+        ast label_child;
+        label_child.type = ast::type::label;
+        label_child.name = lexer::expect(it, vhxcc::token::identifier).lexeme();
+        node.children.push_back(label_child);
+        ast child;
+        child.type = ast::type::expression;
+        vhxcc::parser::expression expr = vhxcc::parser::expect_expression(it);
+        child.expr = expr;
+        node.children.push_back(child);
+        return node;
+    };
+
+    directives["set"] = one_identifier_and_expression_argument;
+
+    auto space_directive = [](const std::string& name, vhxcc::lexer::iterator& it) -> ast {
+        ast node;
+        node.name = name;
+        node.type = ast::type::directive;
+        ast child;
+        child.type = ast::type::expression;
+        vhxcc::parser::expression expr = vhxcc::parser::expect_expression(it);
+        child.expr = expr;
+        node.children.push_back(child);
+        ast child2;
+        child2.type = ast::type::expression;
+        vhxcc::parser::expression expr2 = vhxcc::parser::parse_expression(it);
+        child2.expr = expr2;
+        if (expr2.type != vhxcc::parser::expression::none) {
+            node.children.push_back(child2);
+        }
+        return node;
+    };
+
+    directives["space"] = space_directive;
+    directives["skip"] = space_directive;
+
+    auto equ_directive = [](const std::string& name, vhxcc::lexer::iterator& it) -> ast {
+        ast node;
+        node.name = name;
+        node.type = ast::type::directive;
+        ast label_child;
+        label_child.type = ast::type::label;
+        label_child.name = lexer::expect(it, vhxcc::token::identifier).lexeme();
+        node.children.push_back(label_child);
+        ast child;
+        child.type = ast::type::expression;
+        vhxcc::parser::expression expr = vhxcc::parser::parse_expression(it);
+        child.expr = expr;
+        node.children.push_back(child);
+        return node;
+    };
+
+    directives["equ"] = equ_directive;
+    directives["equiv"] = equ_directive;
+
+    directives["fill"] = [](const std::string& name, vhxcc::lexer::iterator& it) -> ast {
+        ast node;
+        node.name = name;
+        node.type = ast::type::directive;
+        ast repeat_child;
+        repeat_child.type = ast::type::expression;
+        vhxcc::parser::expression repeat_expr = vhxcc::parser::expect_expression(it);
+        repeat_child.expr = repeat_expr;
+        node.children.push_back(repeat_child);
+        if (lexer::match(it, vhxcc::token::comma)) {
+            ast size_child;
+            size_child.type = ast::type::expression;
+            vhxcc::parser::expression size_expr = vhxcc::parser::expect_expression(it);
+            size_child.expr = size_expr;
+            node.children.push_back(size_child);
+            if (lexer::match(it, vhxcc::token::comma)) {
+                ast value_child;
+                value_child.type = ast::type::expression;
+                vhxcc::parser::expression value_expr = vhxcc::parser::expect_expression(it);
+                value_child.expr = value_expr;
+                node.children.push_back(value_child);
+            }
+        }
+        return node;
+    };
+
+    directives["arch"] = [](const std::string& name, vhxcc::lexer::iterator& it) -> ast {
+        ast node;
+        node.name = name;
+        node.type = ast::type::directive;
+        if (vhxcc::token tok = lexer::match(it, vhxcc::token::identifier)) {
+            if (tok != "push" && tok != "pop")
+                throw vhxcc::compile_error(std::format("unknown directive: arch '{}'", tok.lexeme()));
+            ast arch_child;
+            arch_child.type = ast::type::label;
+            arch_child.name = tok.lexeme();
+            node.children.push_back(arch_child);
+        } else {
+            ast arch_child;
+            arch_child.type = ast::type::expression;
+            vhxcc::parser::expression arch_expr = vhxcc::parser::expect_expression(it);
+            arch_child.expr = arch_expr;
+            node.children.push_back(arch_child);
+        }
+        return node;
+    };
 
     std::string current_label;
 
@@ -248,8 +401,8 @@ int main(int argc, const char *argv[]) {
 
             // Process each token from the lexer
 
-            // Check for a dot followed by an identifier (local label or directive)
             if (vhxcc::token tok = lexer::match(it, vhxcc::token::dot)) {
+                // local label or directive
                 auto is_identifier_and_after = [&](const vhxcc::token& _tok) {
                     return _tok == vhxcc::token::identifier && (_tok.pos().column == tok.pos().column + 1);
                 };
@@ -273,6 +426,11 @@ int main(int argc, const char *argv[]) {
                     }
                     asts.push_back(ast);
                 }
+                continue;
+            }
+
+            if (vhxcc::token tok = lexer::match(it, vhxcc::token::identifier)) {
+                // label or instruction
             }
         }
     
