@@ -7,7 +7,6 @@
 #include <initializer_list>
 #include <iostream>
 #include <sstream>
-#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -375,7 +374,7 @@ private:
             if (*it != '"') return lexer::none;
             position pos = it.pos();
             std::string lexeme = "";
-            lexeme += static_cast<char>(*it++); // include opening quote or omit depending on style
+            ++it; // omit opening quote
             while (*it != source::eof && *it != '"') {
                 if (*it == '\\') {
                     lexeme += static_cast<char>(*it++);
@@ -384,7 +383,7 @@ private:
                     lexeme += static_cast<char>(*it++);
             }
             if (*it == '"') {
-                lexeme += static_cast<char>(*it++);
+                ++it;
             }
             return token(token::string_literal, lexeme, pos);
         };
@@ -394,7 +393,7 @@ private:
             if (*it != '\'') return lexer::none;
             position pos = it.pos();
             std::string lexeme = "";
-            lexeme += static_cast<char>(*it++); // include opening quote or omit depending on style
+            ++it; // omit opening quote
             while (*it != source::eof && *it != '\'') {
                 if (*it == '\\') {
                     lexeme += static_cast<char>(*it++);
@@ -403,7 +402,7 @@ private:
                     lexeme += static_cast<char>(*it++);
             }
             if (*it == '\'') {
-                lexeme += static_cast<char>(*it++);
+                ++it;
             }
             return token(token::char_literal, lexeme, pos);
         };
@@ -651,6 +650,30 @@ public:
         if (fn(*it))
             return *it++;
         return lexer::none;
+    }
+
+    template <typename ...Args>
+    static const token& expect_after(lexer::iterator& it, const token& before, Args... args) {
+        const token& tok = expect(it, args...);
+        if (tok.pos().column != before.pos().column + before.lexeme().size())
+            throw vhxcc::compile_error(std::format("unexpected token '{}'", it->lexeme()), tok);
+        return tok;
+    }
+
+    template <typename ...Args>
+    static const token& expect_after(lexer::iterator& it, const std::string& msg, const token& before, Args... args) {
+        const token& tok = expect(it, args...);
+        if (tok.pos().column != before.pos().column + before.lexeme().size())
+            throw vhxcc::compile_error(msg, tok);
+        return tok;
+    }
+
+    template <typename ...Args>
+    static const token& match_after(lexer::iterator& it, const token& before, Args... args) {
+        const token& tok = match(it, args...);
+        if (tok.pos().column != before.pos().column + before.lexeme().size())
+            return lexer::none;
+        return tok;
     }
 
     iterator begin() const {
