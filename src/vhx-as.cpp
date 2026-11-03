@@ -214,6 +214,7 @@ int main(int argc, const char *argv[]) {
     directives["if"] = one_argument;
 
     auto no_argument = [](const std::string& name, vhxcc::lexer::iterator& it) -> ast {
+        (void)it;
         ast node;
         node.name = name;
         node.type = ast::type::directive;
@@ -401,6 +402,9 @@ int main(int argc, const char *argv[]) {
 
             // Process each token from the lexer
 
+            while (lexer::match(it, vhxcc::token::semicolon))
+                ;
+
             if (vhxcc::token tok = lexer::match(it, vhxcc::token::dot)) {
                 // local label or directive
                 auto is_identifier_and_after = [&](const vhxcc::token& _tok) {
@@ -431,7 +435,63 @@ int main(int argc, const char *argv[]) {
 
             if (vhxcc::token tok = lexer::match(it, vhxcc::token::identifier)) {
                 // label or instruction
+                auto is_dot_and_after = [&](const vhxcc::token& _tok) {
+                    return _tok == vhxcc::token::dot && (_tok.pos().column == tok.pos().column + 1);
+                };
+                if (lexer::match(it, vhxcc::token::colon)) {
+                    // label
+                    std::string label = tok.lexeme();
+                    ast node;
+                    node.name = label;
+                    node.type = ast::type::label;
+                    asts.push_back(node);
+                    current_label = label;
+                } else if (lexer::match(it, is_dot_and_after)) {
+                    // explicit local label
+                    auto is_identifier_and_after = [&](const vhxcc::token& _tok) {
+                        return _tok == vhxcc::token::identifier && (_tok.pos().column == tok.pos().column + 1);
+                    };
+                    vhxcc::token tok2 = lexer::expect(it, "malformed label", is_identifier_and_after);
+                    lexer::expect(it, "malformed label", vhxcc::token::colon);
+                    std::string label = tok.lexeme() + "." + tok2.lexeme();
+                    ast ast;
+                    ast.name = label;
+                    ast.type = ast::type::label;
+                    asts.push_back(ast);
+                } else if (vhxcc::token tok2 = lexer::match(it, vhxcc::token::assign)) {
+                    // assignment to a label or symbol
+                    ast node;
+                    node.type = ast::type::directive;
+                    node.name = "equ";
+                    ast label;
+                    label.type = ast::type::label;
+                    label.name = tok.lexeme();
+                    node.children.push_back(std::move(label));
+                    ast child;
+                    child.type = ast::type::expression;
+                    child.expr = vhxcc::parser::expect_expression(it);
+                    node.children.push_back(std::move(child));
+                    asts.push_back(node);
+                } else {
+                    // instruction
+                    ast node;
+                    node.name = tok.lexeme();
+                    node.type = ast::type::instruction;
+                    do {
+                        ast child;
+                        child.type = ast::type::expression;
+                        child.expr = vhxcc::parser::parse_expression(it);
+                        if (child.expr.type != vhxcc::parser::expression::none) {
+                            node.children.push_back(std::move(child));
+                        }
+                    } while (lexer::match(it, vhxcc::token::comma));
+                    asts.push_back(node);
+                }
+                continue;
             }
+
+            // error matches GNU assembler error format
+            throw vhxcc::compile_error(std::format("junk at end of line, first unrecognized token: `{}'", it->lexeme()), *it);
         }
     
     } catch (const vhxcc::compile_error& e) {

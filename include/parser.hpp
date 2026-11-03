@@ -355,7 +355,6 @@ private:
             node.branches.push_back(parse_prefix(it, typenames)); // Right-to-left chaining
             return node;
         } else {
-            lexer::iterator old = it;
             if (token tok = lexer::match(it, token::lparen)) {
                 if (expression type_val = parse_typename(it, typenames)) {
                     lexer::expect(it, "expected ')' in type cast", token::rparen);
@@ -466,6 +465,14 @@ private:
 
             return inner;
         }
+
+        // 4. Pointer symbol for assembly
+        if (token tok = lexer::match(it, token::pointer)) {
+            expression node;
+            node.type = expression::identifier;
+            node.token = tok;
+            return node;
+        }
         
         return parser::none;
     }
@@ -569,7 +576,7 @@ public:
         return expr;
     }
 
-    static expression expect_expression(lexer::iterator& it, const char* message, const parser::typenames& typenames = {}) {
+    static expression expect_expression(lexer::iterator& it, const std::string message, const parser::typenames& typenames = {}) {
         lexer::iterator old = it;
         expression expr = parse_assign(it, typenames);
         if (expr.type == expression::none) {
@@ -578,7 +585,7 @@ public:
         return expr;
     }
 
-    static expression exprect_expression(lexer::iterator& it, const parser::typenames& typenames = {}) {
+    static expression expect_expression(lexer::iterator& it, const parser::typenames& typenames = {}) {
         return expect_expression(it, "expected expression", typenames);
     }
 };

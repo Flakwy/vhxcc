@@ -11,6 +11,7 @@
 #include <string>
 #include <string_view>
 #include <type_traits>
+#include <unordered_set>
 #include <vector>
 #include <unordered_map>
 
@@ -235,8 +236,9 @@ public:
 class lexer {
 private:
     std::vector<token> _tokens;
+    std::unordered_set<std::string> _disabled_operators;
 
-    static std::vector<token> tokenize(const source& source) {
+    std::vector<token> tokenize(const source& source) {
         source::iterator it = source.begin();
         std::vector<token> tokens;
 
@@ -284,10 +286,11 @@ private:
             {"|=", token::or_assign},
             {"^=", token::xor_assign},
             {"<<=", token::lshift_assign},
-            {">>=", token::rshift_assign}
+            {">>=", token::rshift_assign},
+            {"$", token::pointer}
         };
 
-        static auto check_operator = [](source::iterator& it) -> token {
+        auto check_operator = [&](source::iterator& it) -> token {
             // static constexpr std::string_view operator_symbols = "+-=<>*/()[]{}%!~^&|.,?";
             position pos = it.pos();
             std::string lexeme = "";
@@ -301,17 +304,17 @@ private:
                 }
                 std::string tmp = lexeme;
                 tmp += static_cast<char>(c);
-                if (!operators.contains(tmp))
+                if (!(operators.contains(tmp) && !_disabled_operators.contains(tmp)))
                     break;
                 lexeme = tmp;
                 ++it;
             }
-            if (lexeme.size() == 0 || !operators.contains(lexeme))
+            if (lexeme.size() == 0 || !(operators.contains(lexeme) && !_disabled_operators.contains(lexeme)))
                 return lexer::none;
             return token(operators.at(lexeme), lexeme, pos);
         };
 
-        static auto check_identifier = [](source::iterator& it) -> token {
+        auto check_identifier = [&](source::iterator& it) -> token {
             position pos = it.pos();
             std::string lexeme = "";
             if (*it == source::eof || !(isalpha(*it) || *it == '_'))
@@ -323,7 +326,7 @@ private:
             return token(token::identifier, lexeme, pos);
         };
 
-        static auto check_numerical_literal = [](source::iterator& it) -> token {
+        auto check_numerical_literal = [&](source::iterator& it) -> token {
             source::iterator old = it;
             position pos = it.pos();
             std::string lexeme = "";
@@ -368,7 +371,7 @@ private:
         };
         
         // Added support for string literals ("...")
-        static auto check_string_literal = [](source::iterator& it) -> token {
+        auto check_string_literal = [&](source::iterator& it) -> token {
             if (*it != '"') return lexer::none;
             position pos = it.pos();
             std::string lexeme = "";
@@ -387,7 +390,7 @@ private:
         };
         
         // Added support for string literals ("...")
-        static auto check_char_literal = [](source::iterator& it) -> token {
+        auto check_char_literal = [&](source::iterator& it) -> token {
             if (*it != '\'') return lexer::none;
             position pos = it.pos();
             std::string lexeme = "";
@@ -482,7 +485,8 @@ public:
 
     lexer() {}
 
-    lexer(const source& source) {
+    lexer(const source& source, std::unordered_set<std::string> disabled = {}) {
+        _disabled_operators = disabled;
         _tokens = tokenize(source);
     }
 
@@ -663,6 +667,14 @@ public:
 
     iterator cend() const {
         return iterator(*this, _tokens.size());
+    }
+
+    void disable(const std::string& op) {
+        _disabled_operators.insert(op);
+    }
+
+    void enable(const std::string& op) {
+        _disabled_operators.erase(op);
     }
 };
 
