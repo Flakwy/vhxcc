@@ -38,7 +38,7 @@ public:
 
         void insert(const std::string& _namespace, const std::string& _typename) {
             if (!_namespaces.contains(_namespace))
-                throw std::runtime_error(std::format("unknown namespace '{}'", _namespace));
+                throw vhxcc::compile_error(std::format("unknown namespace '{}'", _namespace));
             _namespaces.at(_namespace).insert(_typename);
         }
 
@@ -64,7 +64,7 @@ public:
 
         bool contains(const std::string& _namespace, const std::string& _typename) const {
             if (!_namespaces.contains(_namespace))
-                throw std::runtime_error(std::format("unknown namespace '{}'", _namespace));
+                throw vhxcc::compile_error(std::format("unknown namespace '{}'", _namespace));
             return _namespaces.at(_namespace).contains(_typename);
         }
     };
@@ -90,7 +90,7 @@ public:
         }
     };
 
-    static inline const expression none = {expression::none, lexer::none};
+    static inline const expression none = {expression::none, lexer::none, {}};
 
 private:
 
@@ -374,7 +374,7 @@ private:
         type_val.type = expression::_typename;
 
         static auto is_qualifier_or_modifier = [](const token& token) -> bool {
-            return (token == token::identifier) && (token == "const" || token == "volatile" || token == "restrict") || (token == "short" || token == "long" || token == "signed" || token == "unsigned");
+            return (token == token::identifier) && ((token == "const" || token == "volatile" || token == "restrict") || (token == "short" || token == "long" || token == "signed" || token == "unsigned"));
         };
 
         static auto is_modifier = [](const token& token) -> bool {
