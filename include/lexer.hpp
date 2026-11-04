@@ -6,6 +6,7 @@
 #include <fstream>
 #include <initializer_list>
 #include <iostream>
+#include <memory>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -48,6 +49,10 @@ public:
 
     source(source&& other) {
         _source = std::move(other._source);
+    }
+
+    source(const std::filesystem::path& path) {
+        append(path);
     }
 
     ~source() = default;
@@ -269,6 +274,7 @@ private:
             {"!=", token::not_equal},
             {"&&", token::land},
             {"||", token::lor},
+            {"!", token::lnot},
             {"(", token::lparen},
             {")", token::rparen},
             {"[", token::lbracket},
@@ -519,11 +525,42 @@ public:
 
     class iterator {
         const lexer* _lexer;
+        std::unique_ptr<iterator> _prev;
         std::size_t _index;
 
-        iterator(const lexer& lexer, std::size_t index = 0) : _lexer(&lexer), _index(index) {}
+        iterator(const lexer& lexer, std::size_t index = 0) : _lexer(&lexer), _index(index), _prev(nullptr) {}
 
     public:
+        iterator() = default;
+        iterator(const iterator& other) {
+            _lexer = other._lexer;
+            _index = other._index;
+            _prev = other._prev ? std::make_unique<iterator>(*other._prev) : nullptr;
+        }
+
+        iterator& operator=(const iterator& other) {
+            if (this != &other) {
+                _lexer = other._lexer;
+                _index = other._index;
+                _prev = other._prev ? std::make_unique<iterator>(*other._prev) : nullptr;
+            }
+            return *this;
+        }
+
+        iterator& operator=(iterator&& other) {
+            if (this != &other) {
+                _lexer = other._lexer;
+                _index = other._index;
+                _prev = std::move(other._prev);
+            }
+            return *this;
+        }
+
+        ~iterator() = default;
+
+        // for inserting a file inside another file
+        iterator(const iterator& first, const iterator& prev) : _lexer(first._lexer), _index(first._index), _prev(std::make_unique<iterator>(prev)) {}
+
         const token& operator*() const {
             if (_index >= _lexer->_tokens.size())
                 return _lexer->_tokens.back();
@@ -537,40 +574,31 @@ public:
         }
 
         iterator& operator++() {
-            if (_index >= _lexer->_tokens.size())
+            if (_index >= _lexer->_tokens.size()) {
+                if (_prev)
+                    *this = *_prev;
                 return *this;
+            }
             ++_index;
             return *this;
         }
 
         iterator operator++(int) {
             iterator old = *this;
-            if (_index >= _lexer->_tokens.size())
+            if (_index >= _lexer->_tokens.size()) {
+                if (_prev)
+                    *this = *_prev;
                 return old;
+            }
             ++_index;
             return old;
         }
 
-        iterator& operator--() {
-            if (_index == 0)
-                return *this;
-            --_index;
-            return *this;
-        }
-
-        iterator operator--(int) {
-            iterator old = *this;
-            if (_index == 0)
-                return old;
-            --_index;
-            return old;
-        }
-
         bool operator!=(const iterator& rhs) const {
-            return _index != rhs._index;
+            return (_index != rhs._index) || (_lexer != rhs._lexer);
         }
         bool operator==(const iterator& rhs) const {
-            return _index == rhs._index;
+            return (_index == rhs._index) && (_lexer == rhs._lexer);
         }
 
         friend class lexer;
@@ -655,7 +683,7 @@ public:
     template <typename ...Args>
     static const token& expect_after(lexer::iterator& it, const token& before, Args... args) {
         const token& tok = expect(it, args...);
-        if (tok.pos().column != before.pos().column + before.lexeme().size())
+        if (tok.pos().column != before.pos().column + before.lexeme().size() || tok.pos().line != before.pos().line)
             throw vhxcc::compile_error(std::format("unexpected token '{}'", it->lexeme()), tok);
         return tok;
     }
@@ -663,16 +691,19 @@ public:
     template <typename ...Args>
     static const token& expect_after(lexer::iterator& it, const std::string& msg, const token& before, Args... args) {
         const token& tok = expect(it, args...);
-        if (tok.pos().column != before.pos().column + before.lexeme().size())
+        if (tok.pos().column != before.pos().column + before.lexeme().size() || tok.pos().line != before.pos().line)
             throw vhxcc::compile_error(msg, tok);
         return tok;
     }
 
     template <typename ...Args>
     static const token& match_after(lexer::iterator& it, const token& before, Args... args) {
+        lexer::iterator old = it;
         const token& tok = match(it, args...);
-        if (tok.pos().column != before.pos().column + before.lexeme().size())
+        if (tok.pos().column != before.pos().column + before.lexeme().size() || tok.pos().line != before.pos().line) {
+            it = old;
             return lexer::none;
+        }
         return tok;
     }
 
@@ -681,7 +712,7 @@ public:
     }
 
     iterator end() const {
-        return iterator(*this, _tokens.size());
+        return iterator(*this, _tokens.size()-1);
     }
 
     iterator cbegin() const {
@@ -689,7 +720,7 @@ public:
     }
 
     iterator cend() const {
-        return iterator(*this, _tokens.size());
+        return iterator(*this, _tokens.size()-1);
     }
 
     void disable(const std::string& op) {

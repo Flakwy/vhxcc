@@ -48,6 +48,7 @@ public:
         not_equal,
         land,
         lor,
+        lnot,
         lparen,
         rparen,
         lbracket,
@@ -152,6 +153,7 @@ public:
             case not_equal:       return "not_equal";
             case land:            return "land";
             case lor:             return "lor";
+            case lnot:            return "lnot";
             case lparen:          return "lparen";
             case rparen:          return "rparen";
             case lbracket:        return "lbracket";

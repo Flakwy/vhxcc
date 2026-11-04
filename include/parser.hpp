@@ -1,5 +1,6 @@
 #pragma once
 
+#include "token.hpp"
 #include <lexer.hpp>
 #include <initializer_list>
 #include <string>
@@ -78,6 +79,7 @@ public:
             binary,
             ternary,
             call,
+            asm_memory,
             _typename
         };
 
@@ -94,8 +96,8 @@ public:
 
 private:
 
-    static expression parse_assign(lexer::iterator& it, const parser::typenames& typenames) {
-        expression lhs = parse_lor(it, typenames);
+    static expression parse_assign(lexer::iterator& it, const parser::typenames& typenames, bool assembly = false) {
+        expression lhs = parse_lor(it, typenames, assembly);
 
         static const std::initializer_list<enum token::type> assign_ops = {
             token::assign, token::lshift_assign, token::and_assign,
@@ -109,16 +111,16 @@ private:
             rhs.type = expression::binary;
             rhs.token = tok;
             rhs.branches.push_back(std::move(lhs));
-            rhs.branches.push_back((parse_assign(it, typenames)));
+            rhs.branches.push_back((parse_assign(it, typenames, assembly)));
             lhs = std::move(rhs);
         } else if (token tok = lexer::match(it, token::question)) {
             expression rhs;
             rhs.type = expression::ternary;
             rhs.token = tok;
             rhs.branches.push_back(std::move(lhs));
-            rhs.branches.push_back(parse_assign(it, typenames));
+            rhs.branches.push_back(parse_assign(it, typenames, assembly));
             lexer::expect(it, "malformed ternary expression", token::colon);
-            rhs.branches.push_back(parse_assign(it, typenames));
+            rhs.branches.push_back(parse_assign(it, typenames, assembly));
             lhs = std::move(rhs);
         }
         if (lhs.type == expression::none) {
@@ -132,14 +134,14 @@ private:
         return lhs;
     }
 
-    static expression parse_lor(lexer::iterator& it, const parser::typenames& typenames) {
-        expression lhs = parse_land(it, typenames);
+    static expression parse_lor(lexer::iterator& it, const parser::typenames& typenames, bool assembly = false) {
+        expression lhs = parse_land(it, typenames, assembly);
         while (token tok = lexer::match(it, token::lor)) {
             expression rhs;
             rhs.type = expression::binary;
             rhs.token = tok;
             rhs.branches.push_back(std::move(lhs));
-            rhs.branches.push_back(parse_land(it, typenames));
+            rhs.branches.push_back(parse_land(it, typenames, assembly));
             lhs = std::move(rhs);
         }
         if (lhs.type == expression::none) {
@@ -153,14 +155,14 @@ private:
         return lhs;
     }
 
-    static expression parse_land(lexer::iterator& it, const parser::typenames& typenames) {
-        expression lhs = parse_or(it, typenames);
+    static expression parse_land(lexer::iterator& it, const parser::typenames& typenames, bool assembly = false) {
+        expression lhs = parse_or(it, typenames, assembly);
         while (token tok = lexer::match(it, token::land)) {
             expression rhs;
             rhs.type = expression::binary;
             rhs.token = tok;
             rhs.branches.push_back(std::move(lhs));
-            rhs.branches.push_back(parse_or(it, typenames));
+            rhs.branches.push_back(parse_or(it, typenames, assembly));
             lhs = std::move(rhs);
         }
         if (lhs.type == expression::none) {
@@ -174,14 +176,14 @@ private:
         return lhs;
     }
 
-    static expression parse_or(lexer::iterator& it, const parser::typenames& typenames) {
-        expression lhs = parse_xor(it, typenames);
+    static expression parse_or(lexer::iterator& it, const parser::typenames& typenames, bool assembly = false) {
+        expression lhs = parse_xor(it, typenames, assembly);
         while (token tok = lexer::match(it, token::_or)) {
             expression rhs;
             rhs.type = expression::binary;
             rhs.token = tok;
             rhs.branches.push_back(std::move(lhs));
-            rhs.branches.push_back(parse_xor(it, typenames));
+            rhs.branches.push_back(parse_xor(it, typenames, assembly));
             lhs = std::move(rhs);
         }
         if (lhs.type == expression::none) {
@@ -195,14 +197,14 @@ private:
         return lhs;
     }
 
-    static expression parse_xor(lexer::iterator& it, const parser::typenames& typenames) {
-        expression lhs = parse_and(it, typenames);
+    static expression parse_xor(lexer::iterator& it, const parser::typenames& typenames, bool assembly = false) {
+        expression lhs = parse_and(it, typenames, assembly);
         while (token tok = lexer::match(it, token::_xor)) {
             expression rhs;
             rhs.type = expression::binary;
             rhs.token = tok;
             rhs.branches.push_back(std::move(lhs));
-            rhs.branches.push_back(parse_and(it, typenames));
+            rhs.branches.push_back(parse_and(it, typenames, assembly));
             lhs = std::move(rhs);
         }
         if (lhs.type == expression::none) {
@@ -216,14 +218,14 @@ private:
         return lhs;
     }
 
-    static expression parse_and(lexer::iterator& it, const parser::typenames& typenames) {
-        expression lhs = parse_equal(it, typenames);
+    static expression parse_and(lexer::iterator& it, const parser::typenames& typenames, bool assembly = false) {
+        expression lhs = parse_equal(it, typenames, assembly);
         while (token tok = lexer::match(it, token::_and)) {
             expression rhs;
             rhs.type = expression::binary;
             rhs.token = tok;
             rhs.branches.push_back(std::move(lhs));
-            rhs.branches.push_back(parse_equal(it, typenames));
+            rhs.branches.push_back(parse_equal(it, typenames, assembly));
             lhs = std::move(rhs);
         }
         if (lhs.type == expression::none) {
@@ -237,14 +239,14 @@ private:
         return lhs;
     }
 
-    static expression parse_equal(lexer::iterator& it, const parser::typenames& typenames) {
-        expression lhs = parse_compare(it, typenames);
+    static expression parse_equal(lexer::iterator& it, const parser::typenames& typenames, bool assembly = false) {
+        expression lhs = parse_compare(it, typenames, assembly);
         while (token tok = lexer::match(it, token::equal, token::not_equal)) {
             expression rhs;
             rhs.type = expression::binary;
             rhs.token = tok;
             rhs.branches.push_back(std::move(lhs));
-            rhs.branches.push_back(parse_compare(it, typenames));
+            rhs.branches.push_back(parse_compare(it, typenames, assembly));
             lhs = std::move(rhs);
         }
         if (lhs.type == expression::none) {
@@ -258,14 +260,14 @@ private:
         return lhs;
     }
 
-    static expression parse_compare(lexer::iterator& it, const parser::typenames& typenames) {
-        expression lhs = parse_shift(it, typenames);
+    static expression parse_compare(lexer::iterator& it, const parser::typenames& typenames, bool assembly = false) {
+        expression lhs = parse_shift(it, typenames, assembly);
         while (token tok = lexer::match(it, token::less_than, token::less_equal, token::greater_than, token::greater_equal)) {
             expression rhs;
             rhs.type = expression::binary;
             rhs.token = tok;
             rhs.branches.push_back(std::move(lhs));
-            rhs.branches.push_back(parse_shift(it, typenames));
+            rhs.branches.push_back(parse_shift(it, typenames, assembly));
             lhs = std::move(rhs);
         }
         if (lhs.type == expression::none) {
@@ -279,14 +281,14 @@ private:
         return lhs;
     }
 
-    static expression parse_shift(lexer::iterator& it, const parser::typenames& typenames) {
-        expression lhs = parse_addition(it, typenames);
+    static expression parse_shift(lexer::iterator& it, const parser::typenames& typenames, bool assembly = false) {
+        expression lhs = parse_addition(it, typenames, assembly);
         while (token tok = lexer::match(it, token::lshift, token::rshift)) {
             expression rhs;
             rhs.type = expression::binary;
             rhs.token = tok;
             rhs.branches.push_back(std::move(lhs));
-            rhs.branches.push_back(parse_addition(it, typenames));
+            rhs.branches.push_back(parse_addition(it, typenames, assembly));
             lhs = std::move(rhs);
         }
         if (lhs.type == expression::none) {
@@ -300,14 +302,14 @@ private:
         return lhs;
     }
 
-    static expression parse_addition(lexer::iterator& it, const parser::typenames& typenames) {
-        expression lhs = parse_multiplication(it, typenames);
+    static expression parse_addition(lexer::iterator& it, const parser::typenames& typenames, bool assembly = false) {
+        expression lhs = parse_multiplication(it, typenames, assembly);
         while (token tok = lexer::match(it, token::plus, token::minus)) {
             expression rhs;
             rhs.type = expression::binary;
             rhs.token = tok;
             rhs.branches.push_back(std::move(lhs));
-            rhs.branches.push_back(parse_multiplication(it, typenames));
+            rhs.branches.push_back(parse_multiplication(it, typenames, assembly));
             lhs = std::move(rhs);
         }
         if (lhs.type == expression::none) {
@@ -321,14 +323,14 @@ private:
         return lhs;
     }
 
-    static expression parse_multiplication(lexer::iterator& it, const parser::typenames& typenames) {
-        expression lhs = parse_prefix(it, typenames);
+    static expression parse_multiplication(lexer::iterator& it, const parser::typenames& typenames, bool assembly = false) {
+        expression lhs = parse_prefix(it, typenames, assembly);
         while (token tok = lexer::match(it, token::times, token::slash, token::modulo)) {
             expression rhs;
             rhs.type = expression::binary;
             rhs.token = tok;
             rhs.branches.push_back(std::move(lhs));
-            rhs.branches.push_back(parse_prefix(it, typenames));
+            rhs.branches.push_back(parse_prefix(it, typenames, assembly));
             lhs = std::move(rhs);
         }
         if (lhs.type == expression::none) {
@@ -342,27 +344,27 @@ private:
         return lhs;
     }
 
-    static expression parse_prefix(lexer::iterator& it, const parser::typenames& typenames) {
+    static expression parse_prefix(lexer::iterator& it, const parser::typenames& typenames, bool assembly = false) {
         static const std::initializer_list<enum token::type> prefix_ops = {
             token::plus, token::minus, token::_not, token::_and,
-            token::times, token::increment, token::decrement
+            token::lnot, token::times, token::increment, token::decrement
         };
 
         if (token tok = lexer::match(it, prefix_ops)) {
             expression node;
             node.type = expression::unary;
             node.token = tok;
-            node.branches.push_back(parse_prefix(it, typenames)); // Right-to-left chaining
+            node.branches.push_back(parse_prefix(it, typenames, assembly)); // Right-to-left chaining
             return node;
         } else {
             if (token tok = lexer::match(it, token::lparen)) {
-                if (expression type_val = parse_typename(it, typenames)) {
+                if (expression type_val = parse_typename(it, typenames, assembly)) {
                     lexer::expect(it, "expected ')' in type cast", token::rparen);
                     expression node;
                     node.type = expression::binary;
                     node.token = tok;
                     node.branches.push_back(type_val);
-                    node.branches.push_back(parse_prefix(it, typenames));
+                    node.branches.push_back(parse_prefix(it, typenames, assembly));
                     if (node.type == expression::none) {
                         return parser::none;
                     }
@@ -374,20 +376,21 @@ private:
                     return node;
                 }
             }
-            return parse_postfix(it, typenames);
+            return parse_postfix(it, typenames, assembly);
         }
     }
 
-    static expression parse_postfix(lexer::iterator& it, const parser::typenames& typenames) {
-        expression expr = parse_primary(it, typenames);
+    static expression parse_postfix(lexer::iterator& it, const parser::typenames& typenames, bool assembly = false) {
+        expression expr = parse_primary(it, typenames, assembly);
 
+        lexer::iterator old = it;
         while (true) {
             if (lexer::match(it, token::lbracket)) { // Array indexing: expr [ index ]
                 expression node;
                 node.type = expression::binary;
                 node.token = token(token::lbracket, "[");
                 node.branches.push_back(std::move(expr));
-                node.branches.push_back(parse_expression(it, typenames));
+                node.branches.push_back(parse_expression(it, typenames, assembly));
                 lexer::expect(it, token::rbracket);
                 expr = std::move(node);
             } 
@@ -399,24 +402,29 @@ private:
                 
                 if (!lexer::match(it, token::rparen)) {
                     do {
-                        node.branches.push_back(parse_expression(it, typenames));
+                        node.branches.push_back(expect_expression(it, typenames, assembly));
                     } while (lexer::match(it, token::comma));
                     lexer::expect(it, token::rparen);
                 }
                 expr = std::move(node);
             } 
             else if (token tok = lexer::match(it, {token::dot, token::rarrow})) { // Member access: expr . member
-                expression node;
-                node.type = expression::binary;
-                node.token = tok;
-                node.branches.push_back(std::move(expr));
-                
-                token member = lexer::expect(it, "expected member name", token::identifier);
-                expression mem_node;
-                mem_node.type = expression::identifier;
-                mem_node.token = member;
-                node.branches.push_back(std::move(mem_node));
-                expr = std::move(node);
+                if (!assembly) {
+                    expression node;
+                    node.type = expression::binary;
+                    node.token = tok;
+                    node.branches.push_back(std::move(expr));
+                    
+                    token member = lexer::expect(it, "expected member name", token::identifier);
+                    expression mem_node;
+                    mem_node.type = expression::identifier;
+                    mem_node.token = member;
+                    node.branches.push_back(std::move(mem_node));
+                    expr = std::move(node);
+                } else {
+                    it = old; // Reset the iterator to the previous position
+                    return expr;
+                }
             } 
             else if (token tok = lexer::match(it, {token::increment, token::decrement})) { // Postfix ++ / --
                 expression node;
@@ -441,7 +449,7 @@ private:
         return expr;
     }
 
-    static expression parse_primary(lexer::iterator& it, const parser::typenames& typenames) {
+    static expression parse_primary(lexer::iterator& it, const parser::typenames& typenames, bool assembly = false) {
         // 1. Literals
         if (token tok = lexer::match(it, {token::integer_literal, token::float_literal, token::string_literal, token::char_literal})) {
             expression node;
@@ -451,16 +459,43 @@ private:
         }
 
         // 2. Identifiers
-        if (token tok = lexer::match(it, token::identifier)) {
+        if (assembly) {
+            token tok;
+            std::string name = "";
             expression node;
+            vhxcc::position pos;
             node.type = expression::identifier;
-            node.token = tok;
+            if ((tok = lexer::match(it, token::dot))) {
+                pos = tok.pos();
+                name += tok.lexeme();
+                tok = lexer::expect_after(it, "expected identifier", tok, token::identifier);
+                name += tok.lexeme();
+            } else if ((tok = lexer::match(it, token::identifier))) {
+                pos = tok.pos();
+                name += tok.lexeme();
+            } else {
+                goto skip;
+            }
+            while ((tok = lexer::match_after(it, tok, token::dot))) {
+                name += tok.lexeme();
+                tok = lexer::expect_after(it, "expected identifier", tok, token::identifier);
+                name += tok.lexeme();
+            }
+            node.token = token(token::identifier, name, pos);
             return node;
+            skip:
+        } else {
+            if (token tok = lexer::match(it, token::identifier)) {
+                expression node;
+                node.type = expression::identifier;
+                node.token = tok;
+                return node;
+            }
         }
 
         // 3. Parentheses & Casts
         if (token tok = lexer::match(it, token::lparen)) {
-            expression inner = parse_expression(it, typenames);
+            expression inner = parse_expression(it, typenames, assembly);
             lexer::expect(it, token::rparen);
 
             return inner;
@@ -478,7 +513,7 @@ private:
     }
 
 
-    static expression parse_typename(lexer::iterator& it, const parser::typenames& typenames) {
+    static expression parse_typename(lexer::iterator& it, const parser::typenames& typenames, bool assembly = false) {
         lexer::iterator old = it;
         expression type_val;
         type_val.type = expression::_typename;
@@ -564,29 +599,72 @@ private:
         return type_val;
     }
 
-
-public:
-
-    static expression parse_expression(lexer::iterator& it, const parser::typenames& typenames = {}) {
+    static expression _parse_expression(lexer::iterator& it, const parser::typenames& typenames, bool assembly = false) {
         lexer::iterator old = it;
-        expression expr = parse_assign(it, typenames);
+        expression expr = parse_assign(it, typenames, assembly);
         if (expr.type == expression::none) {
             it = old;
         }
         return expr;
     }
 
-    static expression expect_expression(lexer::iterator& it, const std::string message, const parser::typenames& typenames = {}) {
+public:
+
+    static expression parse_expression(lexer::iterator& it, const parser::typenames& typenames, bool assembly = false) {
+        return _parse_expression(it, typenames, assembly);
+    }
+
+    static expression parse_expression(lexer::iterator& it, bool assembly = false) {
+        return _parse_expression(it, {}, assembly);
+    }
+
+    static expression expect_expression(lexer::iterator& it, const std::string message, const parser::typenames& typenames, bool assembly = false) {
         lexer::iterator old = it;
-        expression expr = parse_assign(it, typenames);
+        expression expr = _parse_expression(it, typenames, assembly);
         if (expr.type == expression::none) {
             throw vhxcc::compile_error(message, *old);
         }
         return expr;
     }
 
-    static expression expect_expression(lexer::iterator& it, const parser::typenames& typenames = {}) {
-        return expect_expression(it, "expected expression", typenames);
+    static expression expect_expression(lexer::iterator& it, const std::string message, bool assembly = false) {
+        lexer::iterator old = it;
+        expression expr = _parse_expression(it, {}, assembly);
+        if (expr.type == expression::none) {
+            throw vhxcc::compile_error(message, *old);
+        }
+        return expr;
+    }
+
+    static expression expect_expression(lexer::iterator& it, const parser::typenames& typenames, bool assembly = false) {
+        return expect_expression(it, "expected expression", typenames, assembly);
+    }
+
+    static expression expect_expression(lexer::iterator& it, bool assembly = false) {
+        return expect_expression(it, "expected expression", assembly);
+    }
+
+    static expression expect_identifier(lexer::iterator& it, const std::string message, bool assembly = false) {
+        lexer::iterator old = it;
+        expression expr = _parse_expression(it, {}, assembly);
+        if (expr.type != expression::identifier) {
+            throw vhxcc::compile_error(message, *old);
+        }
+        return expr;
+    }
+
+    static expression expect_identifier(lexer::iterator& it, bool assembly = false) {
+        return expect_identifier(it, "expected identifier", assembly);
+    }
+
+    static expression parse_identifier(lexer::iterator& it, bool assembly = false) {
+        lexer::iterator old = it;
+        expression expr = _parse_expression(it, {}, assembly);
+        if (expr.type != expression::identifier) {
+            it = old;
+            return parser::none;
+        }
+        return expr;
     }
 };
 
