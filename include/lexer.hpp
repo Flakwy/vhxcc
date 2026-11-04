@@ -78,8 +78,10 @@ public:
 
     source& append(std::filesystem::path path) {
         std::ifstream handle(path);
-        if (!handle.is_open())
-            throw vhxcc::compile_error(std::format("could not open file: {}", path.string()));
+        if (!handle.is_open()) {
+            vhxcc::error("could not open file", token(token::none, path.string()));
+            return *this;
+        }
         std::stringstream buffer;
         buffer << handle.rdbuf();
 
@@ -442,7 +444,8 @@ private:
                                 break;
                             }
                         } else if (*it == source::eof) {
-                            throw vhxcc::compile_error("unterminated comment", token(token::none, "", pos));
+                            vhxcc::error("unterminated comment", token(token::none, "", pos));
+                            break;
                         }
                     }
                 }
@@ -612,7 +615,8 @@ public:
                 return tok;
             }
         }
-        throw vhxcc::compile_error(std::format("unexpected token '{}'", it->lexeme()), *it); // for now until I make a token::type_str(token::type)
+        vhxcc::error(std::format("unexpected token '{}'", it->lexeme()), *it);
+        return lexer::none;
     }
 
     static const token& expect(lexer::iterator& it, std::string_view msg, std::initializer_list<enum token::type> expected) {
@@ -623,7 +627,8 @@ public:
                 return tok;
             }
         }
-        throw vhxcc::compile_error(msg, *it);
+        vhxcc::error(msg, *it);
+        return lexer::none;
     }
 
     template <typename... Args>
@@ -637,7 +642,8 @@ public:
     static const token& expect(lexer::iterator& it, Fn&& fn) {
         if (fn(*it))
             return *it++;
-        throw vhxcc::compile_error(std::format("unexpected token '{}'", it->lexeme()), *it);
+        vhxcc::error(std::format("unexpected token '{}'", it->lexeme()), *it);
+        return lexer::none;        
     }
 
     template <typename Fn>
@@ -646,7 +652,8 @@ public:
         if (fn(*it)) {
             return *it++;
         }
-        throw vhxcc::compile_error(msg, *it);
+        vhxcc::error(msg, *it);
+        return lexer::none;
     }
 
     template <typename... Args,
@@ -683,16 +690,20 @@ public:
     template <typename ...Args>
     static const token& expect_after(lexer::iterator& it, const token& before, Args... args) {
         const token& tok = expect(it, args...);
-        if (tok.pos().column != before.pos().column + before.lexeme().size() || tok.pos().line != before.pos().line)
-            throw vhxcc::compile_error(std::format("unexpected token '{}'", it->lexeme()), tok);
+        if (tok.pos().column != before.pos().column + before.lexeme().size() || tok.pos().line != before.pos().line) {
+            vhxcc::error(std::format("unexpected token '{}'", it->lexeme()), tok);
+            return lexer::none;
+        }
         return tok;
     }
 
     template <typename ...Args>
     static const token& expect_after(lexer::iterator& it, const std::string& msg, const token& before, Args... args) {
         const token& tok = expect(it, args...);
-        if (tok.pos().column != before.pos().column + before.lexeme().size() || tok.pos().line != before.pos().line)
-            throw vhxcc::compile_error(msg, tok);
+        if (tok.pos().column != before.pos().column + before.lexeme().size() || tok.pos().line != before.pos().line) {
+            vhxcc::error(msg, tok);
+            return lexer::none;
+        }
         return tok;
     }
 

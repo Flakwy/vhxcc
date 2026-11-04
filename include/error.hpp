@@ -1,10 +1,15 @@
 #pragma once
+#include <string_view>
 #include <token.hpp>
 #include <stdexcept>
 #include <string>
 
 
 namespace vhxcc {
+
+    void warn(std::string_view, const vhxcc::token&);
+    void error(std::string_view, const vhxcc::token&);
+
     class compile_error : public std::runtime_error {
         vhxcc::token tok;
     public:

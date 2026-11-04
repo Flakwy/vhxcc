@@ -72,6 +72,7 @@ public:
         lshift_assign,
         rshift_assign,
         pointer,
+        number,
         unknown
     };
 
@@ -177,6 +178,7 @@ public:
             case lshift_assign:   return "lshift_assign";
             case rshift_assign:   return "rshift_assign";
             case pointer:         return "pointer";
+            case number:          return "number";
             case unknown:         return "unknown token";
         }
         return "unknown token";

@@ -1,9 +1,12 @@
 
 #include "error.hpp"
+#include "isa.hpp"
+#include "object.hpp"
 #include "token.hpp"
 #include <cmath>
 #include <cstddef>
 #include <format>
+#include <functional>
 #include <lexer.hpp>
 #include <filesystem>
 #include <iostream>
@@ -46,6 +49,8 @@ VHX options:
   -march=<arch name>      assemble for architecture <arch name>;
   -mrelax                 enable relax (default)
   -mno-relax              disable relax
+  -mbig-endian            assemble for big-endian
+  -mlittle-endian         assemble for little-endian
 )";
 
 #ifndef HOSTNAME
@@ -72,6 +77,7 @@ struct opts {
     bool relax = true;
     bool help = false;
     bool version = false;
+    bool little = true;
 };
 
 #define BOLD "\033[1m"
@@ -83,6 +89,21 @@ struct opts {
 #define MAGENTA "\033[35m"
 #define CYAN "\033[36m"
 #define WHITE "\033[37m"
+
+static bool errored = false;
+void vhxcc::error(std::string_view msg, const vhxcc::token& tok) {
+    std::cerr << std::format("{}{}:{}:{}: {}error:{} {}", BOLD, tok.pos().file, tok.pos().line, tok.pos().column, RED, RESET, msg) << std::endl;
+    errored = true;
+}
+
+static bool Werror = false;
+void vhxcc::warn(std::string_view msg, const vhxcc::token& tok) {
+    if (Werror) {
+        vhxcc::error(msg, tok);
+    } else {
+        std::cerr << std::format("{}{}:{}:{}: {}warning:{} {}", BOLD, tok.pos().file, tok.pos().line, tok.pos().column, MAGENTA, RESET, msg) << std::endl;
+    }
+}
 
 static std::string expr_to_string(enum parser::expression::type type) {
     switch (type) {
@@ -138,9 +159,11 @@ static void expand_builtins(ast& node, const std::unordered_map<std::string, ast
     }
     if (node.type == ast::expression && node.expr.type == parser::expression::call) {
         std::string builtin = node.expr.token.lexeme();
-        if (!builtins.contains(builtin))
-            throw vhxcc::compile_error(std::format("unknown builtin `{}'", builtin), node.expr.token);
-        node = builtins.at(builtin)(node);
+        if (!builtins.contains(builtin)) {
+            vhxcc::error(std::format("unknown builtin `{}'", builtin), node.expr.token);
+        } else {
+            node = builtins.at(builtin)(node);
+        }
     }
 };
 
@@ -268,8 +291,8 @@ static token reduce_string_or_char(const token& tok) {
 }
 
 struct constexpr_value {
-    vhxcc::position pos;
     std::variant<long long, double, std::string> value;
+    vhxcc::position pos;
 
     constexpr_value() = default;
     constexpr_value(long long v) : value(v), pos() {}
@@ -376,7 +399,7 @@ struct constexpr_value {
     bool operator== (const constexpr_value& other) const {
         if (is_string() && other.is_string())
             return std::get<std::string>(value) == std::get<std::string>(other.value);
-        else if (is_string() && !other.is_string() || !is_string() && other.is_string())
+        else if ((is_string() && !other.is_string()) || (!is_string() && other.is_string()))
             return false;
         return as_string() == other.as_string();
     }
@@ -386,7 +409,7 @@ struct constexpr_value {
     bool operator< (const constexpr_value& other) const {
         if (is_string() && other.is_string())
             return std::get<std::string>(value) < std::get<std::string>(other.value);
-        else if (is_string() && !other.is_string() || !is_string() && other.is_string())
+        else if ((is_string() && !other.is_string()) || (!is_string() && other.is_string()))
             return false;
         if (is_double() || other.is_double())
             return as_double() < other.as_double();
@@ -395,7 +418,7 @@ struct constexpr_value {
     bool operator<= (const constexpr_value& other) const {
         if (is_string() && other.is_string())
             return std::get<std::string>(value) <= std::get<std::string>(other.value);
-        else if (is_string() && !other.is_string() || !is_string() && other.is_string())
+        else if ((is_string() && !other.is_string()) || (!is_string() && other.is_string()))
             return false;
         if (is_double() || other.is_double())
             return as_double() <= other.as_double();
@@ -404,7 +427,7 @@ struct constexpr_value {
     bool operator> (const constexpr_value& other) const {
         if (is_string() && other.is_string())
             return std::get<std::string>(value) > std::get<std::string>(other.value);
-        else if (is_string() && !other.is_string() || !is_string() && other.is_string())
+        else if ((is_string() && !other.is_string()) || (!is_string() && other.is_string()))
             return false;
         if (is_double() || other.is_double())
             return as_double() > other.as_double();
@@ -413,7 +436,7 @@ struct constexpr_value {
     bool operator>= (const constexpr_value& other) const {
         if (is_string() && other.is_string())
             return std::get<std::string>(value) >= std::get<std::string>(other.value);
-        else if (is_string() && !other.is_string() || !is_string() && other.is_string())
+        else if ((is_string() && !other.is_string()) || (!is_string() && other.is_string()))
             return false;
         if (is_double() || other.is_double())
             return as_double() >= other.as_double();
@@ -432,37 +455,43 @@ struct constexpr_value {
         if (is_integer() && other.is_integer())
             return constexpr_value(as_integer() & other.as_integer());
         else
-            throw vhxcc::compile_error(std::format("invalid operands to binary expression ('{}' and '{}')", type(), other.type()), token(token::_and, "&", pos));
+            vhxcc::error(std::format("invalid operands to binary expression ('{}' and '{}')", type(), other.type()), token(token::_and, "&", pos));
+    return *this;
     }
     constexpr_value operator| (const constexpr_value& other) const {
         if (is_integer() && other.is_integer())
             return constexpr_value(as_integer() | other.as_integer());
         else
-            throw vhxcc::compile_error(std::format("invalid operands to binary expression ('{}' and '{}')", type(), other.type()), token(token::_or, "|", pos));
+            vhxcc::error(std::format("invalid operands to binary expression ('{}' and '{}')", type(), other.type()), token(token::_or, "|", pos));
+    return *this;
     }
     constexpr_value operator^ (const constexpr_value& other) const {
         if (is_integer() && other.is_integer())
             return constexpr_value(as_integer() ^ other.as_integer());
         else
-            throw vhxcc::compile_error(std::format("invalid operands to binary expression ('{}' and '{}')", type(), other.type()), token(token::_xor, "^", pos));
+            vhxcc::error(std::format("invalid operands to binary expression ('{}' and '{}')", type(), other.type()), token(token::_xor, "^", pos));
+    return *this;
     }
     constexpr_value operator<< (const constexpr_value& other) const {
         if (is_integer() && other.is_integer())
             return constexpr_value(as_integer() << other.as_integer());
         else
-            throw vhxcc::compile_error(std::format("invalid operands to binary expression ('{}' and '{}')", type(), other.type()), token(token::lshift, "<<", pos));
+            vhxcc::error(std::format("invalid operands to binary expression ('{}' and '{}')", type(), other.type()), token(token::lshift, "<<", pos));
+    return *this;
     }
     constexpr_value operator>> (const constexpr_value& other) const {
         if (is_integer() && other.is_integer())
             return constexpr_value(as_integer() >> other.as_integer());
         else
-            throw vhxcc::compile_error(std::format("invalid operands to binary expression ('{}' and '{}')", type(), other.type()), token(token::rshift, ">>", pos));
+            vhxcc::error(std::format("invalid operands to binary expression ('{}' and '{}')", type(), other.type()), token(token::rshift, ">>", pos));
+    return *this;
     }
     constexpr_value operator~ () const {
         if (is_integer())
             return constexpr_value(~as_integer());
         else
-            throw vhxcc::compile_error(std::format("invalid operand to unary expression ('{}')", type()), token(token::_not, "~", pos));
+            vhxcc::error(std::format("invalid operand to unary expression ('{}')", type()), token(token::_not, "~", pos));
+    return *this;
     }
     constexpr_value operator+ () const {
         if (is_integer())
@@ -470,7 +499,8 @@ struct constexpr_value {
         else if (is_double())
             return constexpr_value(+as_double());
         else
-            throw vhxcc::compile_error(std::format("invalid operand to unary expression ('{}')", type()), token(token::plus, "+", pos));
+            vhxcc::error(std::format("invalid operand to unary expression ('{}')", type()), token(token::plus, "+", pos));
+    return *this;
     }
     constexpr_value operator-() const {
         if (is_integer())
@@ -478,7 +508,8 @@ struct constexpr_value {
         else if (is_double())
             return constexpr_value(-as_double());
         else
-            throw vhxcc::compile_error(std::format("invalid operand to unary expression ('{}')", type()), token(token::minus, "-", pos));
+            vhxcc::error(std::format("invalid operand to unary expression ('{}')", type()), token(token::minus, "-", pos));
+    return *this;
     }
     constexpr_value operator+ (const constexpr_value& other) const {
         if (is_number() && other.is_number()) {
@@ -486,7 +517,8 @@ struct constexpr_value {
                 return constexpr_value(as_double() + other.as_double());
             return constexpr_value(as_integer() + other.as_integer());
         } else
-            throw vhxcc::compile_error(std::format("invalid operands to binary expression ('{}' and '{}')", type(), other.type()), token(token::plus, "+", pos));
+            vhxcc::error(std::format("invalid operands to binary expression ('{}' and '{}')", type(), other.type()), token(token::plus, "+", pos));
+        return *this;
     }
     constexpr_value operator-(const constexpr_value& other) const {
         if (is_number() && other.is_number()) {
@@ -494,7 +526,8 @@ struct constexpr_value {
                 return constexpr_value(as_double() - other.as_double());
             return constexpr_value(as_integer() - other.as_integer());
         } else
-            throw vhxcc::compile_error(std::format("invalid operands to binary expression ('{}' and '{}')", type(), other.type()), token(token::minus, "-", pos));
+            vhxcc::error(std::format("invalid operands to binary expression ('{}' and '{}')", type(), other.type()), token(token::minus, "-", pos));
+        return *this;
     }
     constexpr_value operator* (const constexpr_value& other) const {
         if (is_number() && other.is_number()) {
@@ -502,7 +535,8 @@ struct constexpr_value {
                 return constexpr_value(as_double() * other.as_double());
             return constexpr_value(as_integer() * other.as_integer());
         } else
-            throw vhxcc::compile_error(std::format("invalid operands to binary expression ('{}' and '{}')", type(), other.type()), token(token::times, "*", pos));
+            vhxcc::error(std::format("invalid operands to binary expression ('{}' and '{}')", type(), other.type()), token(token::times, "*", pos));
+        return *this;
     }
     constexpr_value operator/ (const constexpr_value& other) const {
         if (is_number() && other.is_number()) {
@@ -510,7 +544,8 @@ struct constexpr_value {
                 return constexpr_value(as_double() / other.as_double());
             return constexpr_value(as_integer() / other.as_integer());
         } else
-            throw vhxcc::compile_error(std::format("invalid operands to binary expression ('{}' and '{}')", type(), other.type()), token(token::slash, "/", pos));
+            vhxcc::error(std::format("invalid operands to binary expression ('{}' and '{}')", type(), other.type()), token(token::slash, "/", pos));
+        return *this;
     }
     constexpr_value operator% (const constexpr_value& other) const {
         if (is_number() && other.is_number()) {
@@ -518,7 +553,8 @@ struct constexpr_value {
                 return constexpr_value(std::fmod(as_double(), other.as_double()));
             return constexpr_value(as_integer() % other.as_integer());
         } else
-            throw vhxcc::compile_error(std::format("invalid operands to binary expression ('{}' and '{}')", type(), other.type()), token(token::modulo, "%", pos));
+            vhxcc::error(std::format("invalid operands to binary expression ('{}' and '{}')", type(), other.type()), token(token::modulo, "%", pos));
+        return *this;
     }
 };
 
@@ -902,8 +938,10 @@ int main(int argc, const char *argv[]) {
         node.name = name.lexeme();
         node.type = ast::type::directive;
         if (vhxcc::token tok = lexer::match(it, vhxcc::token::identifier)) {
-            if (tok != "push" && tok != "pop")
-                throw vhxcc::compile_error(std::format("unknown directive: arch '{}'", tok.lexeme()));
+            if (tok != "push" && tok != "pop") {
+                vhxcc::error(std::format("unknown directive: arch '{}'", tok.lexeme()), tok);
+                return {ast::none, tok.pos(), "", {}, {}};
+            }
             ast arch_child;
             arch_child.type = ast::type::label;
             arch_child.name = tok.lexeme();
@@ -991,7 +1029,8 @@ int main(int argc, const char *argv[]) {
             }
 
             // error matches GNU assembler error format
-            throw vhxcc::compile_error(std::format("junk at end of line, first unrecognized token: `{}'", it->lexeme()), *it);
+            
+            vhxcc::error(std::format("junk at end of line, first unrecognized token: `{}'", it->lexeme()), *it++);
         }
 
         // for (const auto& ast : asts) {
@@ -1000,7 +1039,7 @@ int main(int argc, const char *argv[]) {
 
         std::unordered_map<std::string, ast (*)(ast&)> builtins;
 
-        static auto make_unary = [](enum token::type op, const parser::expression& operand) {
+        static auto make_unary [[maybe_unused]]  = [](enum token::type op, const parser::expression& operand) {
             parser::expression expr;
             expr.type = parser::expression::unary;
             expr.token = token(op);
@@ -1008,7 +1047,7 @@ int main(int argc, const char *argv[]) {
             return expr;
         };
 
-        static auto make_binary = [](const parser::expression& lhs, enum token::type op, const parser::expression& rhs) {
+        static auto make_binary [[maybe_unused]] = [](const parser::expression& lhs, enum token::type op, const parser::expression& rhs) {
             parser::expression expr;
             expr.type = parser::expression::binary;
             expr.token = token(op);
@@ -1017,21 +1056,21 @@ int main(int argc, const char *argv[]) {
             return expr;
         };
 
-        static auto make_literal = [](long x) {
+        static auto make_literal [[maybe_unused]] = [](long x) {
             parser::expression expr;
             expr.type = parser::expression::literal;
             expr.token = token(token::integer_literal, std::to_string(x));
             return expr;
         };
 
-        static auto make_pointer = []() {
+        static auto make_pointer [[maybe_unused]] = []() {
             parser::expression expr;
             expr.type = parser::expression::identifier;
             expr.token = token(token::pointer, "$");
             return expr;
         };
 
-        static auto make_identifier = [](const std::string& id) {
+        static auto make_identifier [[maybe_unused]] = [](const std::string& id) {
             parser::expression expr;
             expr.type = parser::expression::identifier;
             expr.token = token(token::pointer, id);
@@ -1078,7 +1117,7 @@ int main(int argc, const char *argv[]) {
         };
 
         std::string section = ".text";
-        std::unordered_map<std::string, std::vector<ast>> sections;
+        std::unordered_map<std::string, std::vector<ast>> sections_asts;
         std::unordered_set<std::string> defined;
 
         // Track state for nested conditional assembly blocks
@@ -1112,8 +1151,10 @@ int main(int argc, const char *argv[]) {
                     continue;
                 }
                 else if (ast.name == ".else") {
-                    if (cond_stack.size() <= 1)
-                        throw vhxcc::compile_error(".else without matching .if");
+                    if (cond_stack.size() <= 1) {
+                        vhxcc::error(".else without matching .if", token(token::identifier, ast.name, ast.pos));
+                        continue;
+                    }
                     
                     auto& current = cond_stack.back();
                     // If the 'if' branch was NOT taken, activate the else branch
@@ -1122,8 +1163,9 @@ int main(int argc, const char *argv[]) {
                     continue;
                 }
                 else if (ast.name == ".endif") {
-                    if (cond_stack.size() <= 1)
-                        throw vhxcc::compile_error("mismatched .endif");
+                    if (cond_stack.size() <= 1) {
+                        vhxcc::error("mismatched .endif", token(token::identifier, ast.name, ast.pos));
+                    }
                     cond_stack.pop_back();
                     continue;
                 }
@@ -1132,96 +1174,564 @@ int main(int argc, const char *argv[]) {
             // Only process nodes if the current conditional scope allows emission
             if (cond_stack.back().active) {
                 if (ast.type == ast::directive && ast.name == ".err") {
-                    throw vhxcc::compile_error(".err encountered", token(token::identifier, ast.name, ast.pos));
+                    vhxcc::error(".err encountered", token(token::identifier, ast.name, ast.pos));
                 } else if (ast.type == ast::directive && ast.name == ".section") {
                     std::string section_name = ast.children.front().expr.token.lexeme();
-                    if (section_name.empty())
-                        throw vhxcc::compile_error("empty section name");
-                    section = section_name;
+                    if (section_name.empty()) {
+                        vhxcc::error("empty section name", token(token::identifier, ast.name, ast.pos));
+                    } else {
+                        section = section_name;
+                    }
                 } else if (ast.type == ast::directive && (ast.name == ".set" || ast.name == ".equ" || ast.name == ".equiv")) {
                     std::string symbol_name = ast.children.front().expr.token.lexeme();
-                    if (ast.name == ".equiv" && defined.contains(symbol_name))
-                        throw vhxcc::compile_error(std::format("symbol `{}' is already defined", symbol_name), token(token::identifier, ast.name, ast.pos));
-                    defined.insert(symbol_name);
-                    parser::expression folded = constexpr_fold(ast.children[1].expr, constexprs);
-                    if (folded.type != parser::expression::none) {
-                        constexpr_value folded_value = folded;
-                        constexprs[symbol_name] = folded;
+                    if (ast.name == ".equiv" && defined.contains(symbol_name)) {
+                        vhxcc::error(std::format("symbol `{}' is already defined", symbol_name), token(token::identifier, ast.name, ast.pos));
+                    } else {
+                        defined.insert(symbol_name);
+                        parser::expression folded = constexpr_fold(ast.children[1].expr, constexprs);
+                        if (folded.type != parser::expression::none) {
+                            constexpr_value folded_value = folded;
+                            constexprs[symbol_name] = folded;
+                        }
+                        sections_asts[section].push_back(ast);
                     }
-                    sections[section].push_back(ast);
                 } else if (ast.type == ast::label) {
                     defined.insert(ast.name);
-                    sections[section].push_back(ast);
+                    sections_asts[section].push_back(ast);
                 } else {
-                    sections[section].push_back(ast);
+                    sections_asts[section].push_back(ast);
                 }
             }
         }
 
         if (cond_stack.size() > 1) {
-            throw vhxcc::compile_error("unclosed conditional block (missing .endif)");
+            vhxcc::error("unclosed conditional block (missing .endif)", lexer::none);
         }
 
-        std::unordered_map<std::string, std::size_t> section_sizes;
-        std::unordered_map<std::string, std::unordered_map<std::string, std::size_t>> section_labels;
-        std::size_t offset = 0;
-        for (auto& [section, asts] : sections) {
-            section_sizes[section] = 0;
-            section_labels[section];
+        struct binary_node {
+            enum type {
+                opcode,
+                binary,
+                label,
+                align,
+                org
+            } type;
+
+            vhxcc::position source_pos;
+            std::string name;
+            std::size_t size;
+            encode_result encoding;
+            std::vector<parser::expression> operands;
+        };
+
+        struct section_final {
+            std::vector<binary_node> nodes;
+            std::size_t pointer;
+        };
+
+        struct label_info {
+            std::string section;
+            std::size_t offset;
+        };
+
+        std::unordered_map<std::string, std::vector<std::pair<std::string, std::size_t>>> label_references;
+        std::unordered_map<std::string, section_final> sections_final;
+        std::unordered_map<std::string, label_info> labels_info;
+
+        auto fold_and_validate = [&](this auto& self, const parser::expression& expr, std::vector<label_info> cur_labels = {}) -> parser::expression {
+            // 1. Helper to represent a flattened linear expression: constant + sum(coeff * symbol)
+            struct evaluated_expr {
+                bool valid = true;
+                int64_t constant = 0;
+                std::unordered_map<std::string, int64_t> symbols; // symbol -> net coefficient
+            };
+
+            // Recursive flattener that distributes multipliers (handling unary/binary +/- and constant multiplication)
+            std::function<evaluated_expr(const parser::expression&, int64_t)> flatten = [&](const parser::expression& e, int64_t mult) -> evaluated_expr {
+                evaluated_expr res;
+                
+                // Reject string literals immediately
+                // (Assuming parser::expression has a string type or token check)
+                if (e.type == parser::expression::literal && e.token.type() == token::string_literal) {
+                    res.valid = false;
+                    return res;
+                }
+
+                if (e.type == parser::expression::literal) {
+                    // Extract literal value (adjust based on your token/expression value member)
+                    int64_t val = 0;
+                    if (!e.token.lexeme().empty()) {
+                        if (e.token.type() == token::char_literal) {
+                            val = 0;
+                            for (std::size_t i = 0; i < e.token.lexeme().size() && i < 8; i++) {
+                                val = (val << 8) | (uint64_t)(uint8_t)e.token.lexeme()[i];
+                            }
+                        } else {
+                            // Safe parse of literal token text
+                            try { val = std::stoll(std::string(e.token.lexeme()), nullptr, 0); } catch(...) { val = 0; }
+                        }
+                    }
+                    res.constant = val * mult;
+                    return res;
+                } 
+                else if (e.type == parser::expression::identifier) {
+                    res.symbols[std::string(e.token.lexeme())] += mult;
+                    return res;
+                } 
+                else if (e.type == parser::expression::unary) {
+                    if (e.token.type() == token::plus) {
+                        return flatten(e.branches[0], mult);
+                    } else if (e.token.type() == token::minus) {
+                        return flatten(e.branches[0], -mult);
+                    }
+                    res.valid = false;
+                    return res;
+                } 
+                else if (e.type == parser::expression::binary) {
+                    auto op = e.token.type();
+                    if (op == token::plus) {
+                        auto left = flatten(e.branches[0], mult);
+                        auto right = flatten(e.branches[1], mult);
+                        if (!left.valid || !right.valid) { res.valid = false; return res; }
+                        res.constant = left.constant + right.constant;
+                        res.symbols = std::move(left.symbols);
+                        for (auto& [sym, coeff] : right.symbols) {
+                            res.symbols[sym] += coeff;
+                        }
+                        return res;
+                    } 
+                    else if (op == token::minus) {
+                        auto left = flatten(e.branches[0], mult);
+                        auto right = flatten(e.branches[1], -mult); // invert multiplier for RHS
+                        if (!left.valid || !right.valid) { res.valid = false; return res; }
+                        res.constant = left.constant + right.constant;
+                        res.symbols = std::move(left.symbols);
+                        for (auto& [sym, coeff] : right.symbols) {
+                            res.symbols[sym] += coeff;
+                        }
+                        return res;
+                    } 
+                    else if (op == token::times) {
+                        // Multiplication: one side MUST be a pure constant
+                        auto left = flatten(e.branches[0], 1);
+                        auto right = flatten(e.branches[1], 1);
+                        if (!left.valid || !right.valid) { res.valid = false; return res; }
+
+                        if (left.symbols.empty() && right.symbols.empty()) {
+                            res.constant = left.constant * right.constant * mult;
+                            return res;
+                        } else if (left.symbols.empty()) {
+                            if (left.constant == 0) return res;
+                            res.constant = 0;
+                            for (auto& [sym, coeff] : right.symbols) {
+                                res.symbols[sym] = coeff * left.constant * mult;
+                            }
+                            return res;
+                        } else if (right.symbols.empty()) {
+                            if (right.constant == 0) return res;
+                            res.constant = 0;
+                            for (auto& [sym, coeff] : left.symbols) {
+                                res.symbols[sym] = coeff * right.constant * mult;
+                            }
+                            return res;
+                        } else {
+                            res.valid = false;
+                            return res;
+                        }
+                    }
+                    // Division, Modulus, and Bitwise / Shift Operations (Constant-Only)
+                    else if (op == token::slash || op == token::slash || op == token::modulo ||
+                             op == token::_and || op == token::_or || op == token::_xor ||
+                             op == token::lshift || op == token::rshift) {
+                        
+                        auto left = flatten(e.branches[0], 1);
+                        auto right = flatten(e.branches[1], 1);
+                        if (!left.valid || !right.valid) { res.valid = false; return res; }
+
+                        // Both sides must be pure constants (no symbols allowed)
+                        if (!left.symbols.empty() || !right.symbols.empty()) {
+                            res.valid = false;
+                            return res;
+                        }
+
+                        int64_t l_val = left.constant;
+                        int64_t r_val = right.constant;
+                        int64_t calc = 0;
+
+                        if (op == token::slash || op == token::slash) {
+                            if (r_val == 0) { res.valid = false; return res; } // Guard division by zero
+                            calc = l_val / r_val;
+                        } 
+                        else if (op == token::modulo) {
+                            if (r_val == 0) { res.valid = false; return res; } // Guard modulo by zero
+                            calc = l_val % r_val;
+                        } 
+                        else if (op == token::_and) {
+                            calc = l_val & r_val;
+                        } 
+                        else if (op == token::_or) {
+                            calc = l_val | r_val;
+                        } 
+                        else if (op == token::_xor) {
+                            calc = l_val ^ r_val;
+                        } 
+                        else if (op == token::lshift) {
+                            if (r_val < 0 || r_val >= 64) { res.valid = false; return res; }
+                            calc = l_val << r_val;
+                        } 
+                        else if (op == token::rshift) {
+                            if (r_val < 0 || r_val >= 64) { res.valid = false; return res; }
+                            calc = l_val >> r_val;
+                        }
+
+                        res.constant = calc * mult;
+                        return res;
+                    }
+                }
+
+
+                res.valid = false;
+                return res;
+            };
+
+            // Handle memory operands (`call` expressions e.g. offset(base))
+            if (expr.type == parser::expression::call) {
+                if (expr.branches.empty()) return parser::none;
+
+                parser::expression copy = expr;
+                // Fold/validate the offset (branch 0)
+                copy.branches[0] = self(expr.branches[0], cur_labels);
+                if (copy.branches.size() > 1) {
+                    // Base validation (branch 1)
+                    parser::expression& base = copy.branches[1];
+                    bool valid_base = false;
+                    if (base.type == parser::expression::identifier) {
+                        valid_base = true;
+                    } else if (base.type == parser::expression::unary || base.type == parser::expression::binary) {
+                        parser::expression& _base = base.branches[0];
+                        valid_base = (base.token.type() == token::increment || base.token.type() == token::decrement) && _base.type == parser::expression::identifier;
+                    }
+                    if (!valid_base) return parser::none;
+                }
+                return copy;
+            }
+
+            // 2. Flatten standard expressions
+            evaluated_expr ev = flatten(expr, 1);
+            if (!ev.valid) return parser::none;
+
+            // 3. Section-based Symbol Cancellation (`label - label` in same section)
+            // Group symbols by section
+            std::unordered_map<std::string, std::vector<std::pair<std::string, int64_t*>>> section_symbols;
+            for (auto& [sym, coeff] : ev.symbols) {
+                auto it = labels_info.find(sym);
+                if (it != labels_info.end()) {
+                    section_symbols[it->second.section].push_back({sym, &coeff});
+                } else {
+                    // Unknown/external symbol: keep track of it
+                    section_symbols["__EXTERNAL__"].push_back({sym, &coeff});
+                }
+            }
+
+            // Perform intra-section cancellation for paired +1 and -1 coefficients
+            for (auto& [sec, syms] : section_symbols) {
+                if (sec == "__EXTERNAL__") continue;
+
+                // Find all +1 and -1 symbols in this section
+                std::vector<std::string> pos_syms, neg_syms;
+                for (auto& [sym, coeff_ptr] : syms) {
+                    if (*coeff_ptr == 1) pos_syms.push_back(sym);
+                    else if (*coeff_ptr == -1) neg_syms.push_back(sym);
+                }
+
+                // Pair them up to calculate static offset differences
+                size_t pairs = std::min(pos_syms.size(), neg_syms.size());
+                for (size_t i = 0; i < pairs; ++i) {
+                    const std::string& p_sym = pos_syms[i];
+                    const std::string& n_sym = neg_syms[i];
+
+                    int64_t p_offset = labels_info[p_sym].offset;
+                    int64_t n_offset = labels_info[n_sym].offset;
+
+                    // Convert the label difference into a constant offset
+                    ev.constant += (p_offset - n_offset);
+
+                    // Zero out their coefficients
+                    ev.symbols[p_sym] = 0;
+                    ev.symbols[n_sym] = 0;
+                }
+            }
+
+            // 4. Clean up zero-coefficient symbols and validate final net weights
+            std::vector<std::string> active_symbols;
+            for (auto& [sym, coeff] : ev.symbols) {
+                if (coeff != 0) {
+                    if (coeff != 1) {
+                        // Net coefficient must be +1 for a valid relocatable symbol
+                        return parser::none;
+                    }
+                    active_symbols.push_back(sym);
+                }
+            }
+                        // Helper lambdas to cleanly construct expression nodes
+            auto make_identifier_expr = [&](const std::string& name) {
+                parser::expression node;
+                node.type = parser::expression::identifier;
+                // Construct a token for the identifier using the original source position
+                node.token = token(token::identifier, name, expr.token.pos());
+                return node;
+            };
+
+            auto make_literal_expr = [&](int64_t val) {
+                parser::expression node;
+                node.type = parser::expression::literal;
+                // Construct a token for the numeric literal
+                node.token = token(token::number, std::to_string(val), expr.token.pos());
+                return node;
+            };
+
+            // 5. Reconstruct the clean expression form expected by encode_mnemonic:
+            if (active_symbols.empty()) {
+                // Pure constant -> literal (e.g., `42`)
+                return make_literal_expr(ev.constant);
+            } 
+            else if (active_symbols.size() == 1) {
+                const std::string& sym = active_symbols[0];
+                if (ev.constant == 0) {
+                    // Single symbol -> identifier (e.g., `.L0`)
+                    return make_identifier_expr(sym);
+                } 
+                else if (ev.constant > 0) {
+                    // Symbol + Constant -> binary `+` (e.g., `.L0 + 4`)
+                    parser::expression node;
+                    node.type = parser::expression::binary;
+                    node.token = token(token::plus, "+", expr.token.pos());
+                    node.branches.push_back(make_identifier_expr(sym));
+                    node.branches.push_back(make_literal_expr(ev.constant));
+                    return node;
+                } 
+                else {
+                    // Symbol - Constant -> binary `-` (e.g., `.L0 - 4`)
+                    parser::expression node;
+                    node.type = parser::expression::binary;
+                    node.token = token(token::minus, "-", expr.token.pos());
+                    node.branches.push_back(make_identifier_expr(sym));
+                    node.branches.push_back(make_literal_expr(-ev.constant)); // use absolute value
+                    return node;
+                }
+            }
+
+            // More than 1 uncancelled symbol remaining -> invalid expression for instruction encoding
+            return parser::none;
+        };
+
+        auto itob = [&](uint64_t val, std::size_t size) -> std::vector<char> {
+            std::vector<char> bytes;
+            if (opts.little) {
+                for (std::size_t i = 0; i < size; i++) {
+                    bytes.push_back(static_cast<char>(val & 0xff));
+                    val >>= 8;
+                }
+            } else {
+                for (std::size_t i = 0; i < size; i++) {
+                    bytes.push_back(static_cast<char>((val >> (8 * (size - i - 1))) & 0xff));
+                }
+            }
+            return bytes;
+        };
+        
+        for (auto& [section_name, asts] : sections_asts) {
+            section_final& section = sections_final[section_name];
             for (auto& node : asts) {
                 switch (node.type) {
                     case ast::directive: {
                         if (node.name == ".byte") {
-                            section_sizes[section] += 1 * node.children.size();
+                            binary_node bin;
+                            bin.type = binary_node::binary;
+                            bin.encoding.is_valid = true;
+                            bin.encoding.can_relax = false;
+                            bin.encoding.mneumonic = node.name;
+                            bin.encoding.relax = 0;
+                            bin.size = 0;
+                            for (const ast& child : node.children) {
+                                parser::expression expr = fold_and_validate(child.expr);
+                                if (expr.type == parser::expression::literal) {
+                                    uint64_t val = std::stoll(expr.token.lexeme());
+                                    if (val > 0xff) {
+                                        vhxcc::warn(std::format("value {:#x} truncated to {:#x}", val, val & 0xff), expr.token);
+                                        val = val & 0xff;
+                                    }
+                                    std::vector<char> data = itob(val, 1);
+                                    bin.encoding.bytes.insert(bin.encoding.bytes.end(), data.begin(), data.end());
+                                    bin.encoding.size += data.size();
+                                } else {
+                                    vhxcc::error("illegal operands", expr.token);
+                                    continue;
+                                }
+                            }
+                            section.pointer += bin.size;
+                            section.nodes.push_back(bin);
                         } else if (node.name == ".short" || node.name == ".half" || node.name == ".hword") {
-                            section_sizes[section] += 2 * node.children.size();
+                            binary_node bin;
+                            bin.type = binary_node::binary;
+                            bin.encoding.is_valid = true;
+                            bin.encoding.can_relax = false;
+                            bin.encoding.mneumonic = node.name;
+                            bin.encoding.relax = 0;
+                            bin.size = 0;
+                            for (const ast& child : node.children) {
+                                parser::expression expr = fold_and_validate(child.expr);
+                                if (expr.type == parser::expression::literal) {
+                                    uint64_t val = std::stoll(expr.token.lexeme());
+                                    if (val > 0xffff) {
+                                        vhxcc::warn(std::format("value {:#x} truncated to {:#x}", val, val & 0xffff), expr.token);
+                                        val = val & 0xffff;
+                                    }
+                                    std::vector<char> data = itob(val, 2);
+                                    bin.encoding.bytes.insert(bin.encoding.bytes.end(), data.begin(), data.end());
+                                    bin.encoding.size += data.size();
+                                } else {
+                                    vhxcc::error("illegal operands", expr.token);
+                                    continue;
+                                }
+                            }
+                            section.pointer += bin.size;
+                            section.nodes.push_back(bin);
                         } else if (node.name == ".int" || node.name == ".word") {
-                            section_sizes[section] += 4 * node.children.size();
+                            binary_node bin;
+                            bin.type = binary_node::binary;
+                            bin.encoding.is_valid = true;
+                            bin.encoding.can_relax = false;
+                            bin.encoding.mneumonic = node.name;
+                            bin.encoding.relax = 0;
+                            bin.size = 0;
+                            for (const ast& child : node.children) {
+                                parser::expression expr = fold_and_validate(child.expr);
+                                if (expr.type == parser::expression::literal) {
+                                    uint64_t val = std::stoll(expr.token.lexeme());
+                                    if (val > 0xffffffffULL) {
+                                        vhxcc::warn(std::format("value {:#x} truncated to {:#x}", val, val & 0xffffffffULL), expr.token);
+                                        val = val & 0xffffffffULL;
+                                    }
+                                    std::vector<char> data = itob(val, 4);
+                                    bin.encoding.bytes.insert(bin.encoding.bytes.end(), data.begin(), data.end());
+                                    bin.encoding.size += data.size();
+                                } else if (expr.type != parser::expression::none) {
+                                    vhxcc::relocation reloc;
+                                    reloc.type = relocation::vhx_abs32;
+                                    reloc.offset = bin.size;
+                                    reloc.addend = 0;
+                                    if (expr.type == parser::expression::identifier) {
+                                        reloc.symbol = expr.token.lexeme();
+                                    } else if (expr.type == parser::expression::binary) {
+                                        reloc.symbol = expr.branches[0].token.lexeme();
+                                        reloc.addend = std::stoll(expr.branches[1].token.lexeme());
+                                        if (expr.token == token::minus)
+                                            reloc.addend = -reloc.addend;
+                                    }
+                                    bin.encoding.relocations.push_back(reloc);
+                                    std::vector<char> data = itob(0, 4);
+                                    bin.encoding.bytes.insert(bin.encoding.bytes.end(), data.begin(), data.end());
+                                    bin.encoding.size += data.size();
+                                }
+                            }
+                            section.pointer += bin.size;
+                            section.nodes.push_back(bin);
                         } else if (node.name == ".long" || node.name == ".quad" || node.name == ".qword") {
-                            section_sizes[section] += 8 * node.children.size();
+                            binary_node bin;
+                            bin.type = binary_node::binary;
+                            bin.encoding.is_valid = true;
+                            bin.encoding.can_relax = false;
+                            bin.encoding.mneumonic = node.name;
+                            bin.encoding.relax = 0;
+                            bin.size = 0;
+                            for (const ast& child : node.children) {
+                                parser::expression expr = fold_and_validate(child.expr);
+                                if (expr.type == parser::expression::literal) {
+                                    uint64_t val = std::stoll(expr.token.lexeme());
+                                    std::vector<char> data = itob(val, 8);
+                                    bin.encoding.bytes.insert(bin.encoding.bytes.end(), data.begin(), data.end());
+                                    bin.encoding.size += data.size();
+                                } else if (expr.type != parser::expression::none) {
+                                    vhxcc::relocation reloc;
+                                    reloc.type = relocation::vhx_abs64;
+                                    reloc.offset = bin.size;
+                                    reloc.addend = 0;
+                                    if (expr.type == parser::expression::identifier) {
+                                        reloc.symbol = expr.token.lexeme();
+                                    } else if (expr.type == parser::expression::binary) {
+                                        reloc.symbol = expr.branches[0].token.lexeme();
+                                        reloc.addend = std::stoll(expr.branches[1].token.lexeme());
+                                        if (expr.token == token::minus)
+                                            reloc.addend = -reloc.addend;
+                                    }
+                                    bin.encoding.relocations.push_back(reloc);
+                                    std::vector<char> data = itob(0, 8);
+                                    bin.encoding.bytes.insert(bin.encoding.bytes.end(), data.begin(), data.end());
+                                    bin.encoding.size += data.size();
+                                }
+                            }
+                            section.pointer += bin.size;
+                            section.nodes.push_back(bin);
                         } else if (node.name == ".float") {
-                            section_sizes[section] += 4 * node.children.size();
+                            // TODO
                         } else if (node.name == ".double") {
-                            section_sizes[section] += 8 * node.children.size();
+                            // TODO
                         } else if (node.name == ".ascii") {
-                            for (auto& child : node.children) {
-                                if (child.type == ast::expression &&
-                                    child.expr.type == parser::expression::literal &&
-                                    child.expr.token.type() == token::string_literal) {
-                                    
-                                    section_sizes[section] += child.expr.token.lexeme().size();
-                                } else {
-                                    throw vhxcc::compile_error(std::format("unexpected {}", token::type_str(child.expr.token.type())), child.expr.token);
-                                }
-                            }
+                            // TODO
                         } else if (node.name == ".asciz" || node.name == ".string") {
-                            for (auto& child : node.children) {
-                                if (child.type == ast::expression &&
-                                    child.expr.type == parser::expression::literal &&
-                                    child.expr.token.type() == token::string_literal) {
-                                    
-                                    section_sizes[section] += child.expr.token.lexeme().size();
-                                } else {
-                                    throw vhxcc::compile_error(std::format("unexpected {}", token::type_str(child.expr.token.type())), child.expr.token);
-                                }
-                            }
+                            // TODO
                         } else if (node.name == ".skip" || node.name == ".space") {
-
+                            // can only take absexprs
+                            parser::expression folded = constexpr_fold(node.children.front().expr, constexprs);
+                            std::size_t size = constexpr_value(folded).as_integer();
+                            char fill;
+                            if (node.children.size() == 2) {
+                                folded = constexpr_fold(node.children.back().expr, constexprs);
+                                fill = constexpr_value(folded).as_integer();
+                            } else {
+                                fill = 0;
+                            }
+                            binary_node bin;
+                            bin.type = binary_node::binary;
+                            bin.encoding.is_valid = true;
+                            bin.encoding.can_relax = false;
+                            bin.encoding.mneumonic = node.name;
+                            bin.encoding.relax = 0;
+                            bin.size = size;
+                            bin.encoding.bytes.insert(bin.encoding.bytes.end(), size, fill);
+                            section.pointer += bin.size;
+                            section.nodes.push_back(bin);
                         } else if (node.name == ".offset") {
-
+                            // TODO
                         } else if (node.name == ".org") {
-
-                        } else if (node.name == ".equ") {
-
-                        } else if (node.name == ".equiv") {
-
+                            // TODO
+                        } else if (node.name == ".align") {
+                            // TODO
+                        } else if (node.name == ".balign") {
+                            // TODO
+                        } else if (node.name == ".incbin") {
+                            // TODO
                         }
                     } break;
                     case ast::instruction: {
-
+                        binary_node bin;
+                        bin.type = binary_node::opcode;
+                        bin.name = node.name;
+                        bin.encoding = query_mneumonic(node.name);
+                        if (!bin.encoding.is_valid) {
+                            vhxcc::error(std::format("unknown mneumonic `{}'", node.name), token(token::identifier, node.name, node.pos));
+                            continue;
+                        }
+                        bin.size = bin.encoding.size;
+                        section.pointer += bin.size;
+                        section.nodes.push_back(bin);
                     } break;
                     case ast::label: {
-
+                        binary_node bin;
+                        bin.type = binary_node::label;
+                        bin.name = node.name;
+                        section.nodes.push_back(bin);
                     } break;
                     default:
                         break;

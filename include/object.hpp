@@ -25,7 +25,11 @@ struct relocation {
         vhx_rel32,
         vhx_rel64,
         vhx_abs32,
-        vhx_abs64
+        vhx_abs64,
+        vhx_abs_lo16,
+        vhx_abs_hi16,
+        vhx_abs_hlo16,
+        vhx_abs_hhi16
     } type;
 
     std::string symbol;
@@ -138,6 +142,7 @@ public:
 
     const vhxcc::symbol& define(const std::string& section_name, const std::string& name, std::size_t offset, bool global = false) {
         const vhxcc::section& section = this->section(section_name);
+        (void)section;
         vhxcc::symbol symbol;
         symbol.is_global = global;
         symbol.is_defined = true;
