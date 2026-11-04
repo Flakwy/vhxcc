@@ -58,3 +58,7 @@ static const std::unordered_set<std::string> register_names = {
 encode_result vhxcc::query_mneumonic(const std::string& mneumonic, int relax) {
     return {};
 }
+
+encode_result vhxcc::encode_mneumonic(const std::string &mneumonic, const std::vector<vhxcc::parser::expression> &operands, std::size_t offset, int relax) {
+    return {};    
+}
