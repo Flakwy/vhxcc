@@ -158,11 +158,16 @@ static void expand_builtins(ast& node, const std::unordered_map<std::string, ast
         expand_builtins(child, builtins);
     }
     if (node.type == ast::expression && node.expr.type == parser::expression::call) {
-        std::string builtin = node.expr.token.lexeme();
-        if (!builtins.contains(builtin)) {
-            vhxcc::error(std::format("unknown builtin `{}'", builtin), node.expr.token);
-        } else {
-            node = builtins.at(builtin)(node);
+        parser::expression callee = node.expr.branches[0];
+        if (callee.type == parser::expression::identifier) {
+            std::string builtin = node.expr.token.lexeme();
+            std::cout << "builtin " << builtin << std::endl;
+
+            if (!builtins.contains(builtin)) {
+                vhxcc::error(std::format("unknown builtin `{}'", builtin), node.expr.token);
+            } else {
+                node = builtins.at(builtin)(node);
+            }
         }
     }
 };
@@ -979,6 +984,7 @@ int main(int argc, const char *argv[]) {
                     ast ast;
                     ast.name = label;
                     ast.type = ast::type::label;
+                    ast.pos = expr.token.pos();
                     asts.push_back(ast);
                     continue;
                 } else if (directives.contains(expr.token.lexeme())) {
@@ -994,6 +1000,7 @@ int main(int argc, const char *argv[]) {
                         // Recursively parse the included file
                         it = lexer::iterator(lexer.begin(), it);
                     } else {
+                        ast.pos = expr.token.pos();
                         asts.push_back(ast);
                     }
                     continue;
@@ -1010,6 +1017,7 @@ int main(int argc, const char *argv[]) {
                     child.type = ast::type::expression;
                     child.expr = parser::expect_expression(it, true);
                     node.children.push_back(std::move(child));
+                    node.pos = expr.token.pos();
                     asts.push_back(node);
                     continue;
                 } else {
@@ -1017,6 +1025,7 @@ int main(int argc, const char *argv[]) {
                     ast node;
                     node.name = expr.token.lexeme();
                     node.type = ast::type::instruction;
+                    node.pos = expr.token.pos();
                     do {
                         ast child;
                         child.type = ast::type::expression;
@@ -1079,11 +1088,11 @@ int main(int argc, const char *argv[]) {
 
         builtins["hi"] = [](ast& node) -> ast {
             // hi as well!
-            if (node.children.size() < 1)
+            if (node.expr.branches.size() < 1)
                 throw vhxcc::compile_error("expected expression", node.expr.token);
             ast result;
             result.type = ast::expression;
-            result.expr = make_binary(make_binary(node.children[0].expr, token::rshift, make_literal(16)), token::_and, make_literal(0xffff));
+            result.expr = make_binary(make_binary(node.expr.branches[1], token::rshift, make_literal(16)), token::_and, make_literal(0xffff));
             return result;
         };
 
@@ -1540,6 +1549,7 @@ int main(int argc, const char *argv[]) {
             return bytes;
         };
         
+        // first estimate
         for (auto& [section_name, asts] : sections_asts) {
             section_final& section = sections_final[section_name];
             for (auto& node : asts) {
@@ -1547,6 +1557,7 @@ int main(int argc, const char *argv[]) {
                     case ast::directive: {
                         if (node.name == ".byte") {
                             binary_node bin;
+                            bin.name = node.name;
                             bin.type = binary_node::binary;
                             bin.encoding.is_valid = true;
                             bin.encoding.can_relax = false;
@@ -1554,122 +1565,133 @@ int main(int argc, const char *argv[]) {
                             bin.encoding.relax = 0;
                             bin.size = 0;
                             for (const ast& child : node.children) {
-                                parser::expression expr = fold_and_validate(child.expr);
-                                if (expr.type == parser::expression::literal) {
-                                    uint64_t val = std::stoll(expr.token.lexeme());
-                                    if (val > 0xff) {
-                                        vhxcc::warn(std::format("value {:#x} truncated to {:#x}", val, val & 0xff), expr.token);
-                                        val = val & 0xff;
-                                    }
-                                    std::vector<char> data = itob(val, 1);
-                                    bin.encoding.bytes.insert(bin.encoding.bytes.end(), data.begin(), data.end());
-                                    bin.encoding.size += data.size();
-                                } else {
-                                    vhxcc::error("illegal operands", expr.token);
-                                    continue;
-                                }
+                                bin.size += 1;
+                                bin.operands.push_back(child.expr);
+                                // parser::expression expr = fold_and_validate(child.expr);
+                                // if (expr.type == parser::expression::literal) {
+                                //     uint64_t val = std::stoll(expr.token.lexeme());
+                                //     if (val > 0xff) {
+                                //         vhxcc::warn(std::format("value {:#x} truncated to {:#x}", val, val & 0xff), expr.token);
+                                //         val = val & 0xff;
+                                //     }
+                                //     std::vector<char> data = itob(val, 1);
+                                //     bin.encoding.bytes.insert(bin.encoding.bytes.end(), data.begin(), data.end());
+                                //     bin.encoding.size += data.size();
+                                // } else {
+                                //     vhxcc::error("illegal operands", expr.token);
+                                //     continue;
+                                // }
                             }
                             section.pointer += bin.size;
                             section.nodes.push_back(bin);
                         } else if (node.name == ".short" || node.name == ".half" || node.name == ".hword") {
                             binary_node bin;
                             bin.type = binary_node::binary;
+                            bin.name = node.name;
                             bin.encoding.is_valid = true;
                             bin.encoding.can_relax = false;
                             bin.encoding.mneumonic = node.name;
                             bin.encoding.relax = 0;
                             bin.size = 0;
                             for (const ast& child : node.children) {
-                                parser::expression expr = fold_and_validate(child.expr);
-                                if (expr.type == parser::expression::literal) {
-                                    uint64_t val = std::stoll(expr.token.lexeme());
-                                    if (val > 0xffff) {
-                                        vhxcc::warn(std::format("value {:#x} truncated to {:#x}", val, val & 0xffff), expr.token);
-                                        val = val & 0xffff;
-                                    }
-                                    std::vector<char> data = itob(val, 2);
-                                    bin.encoding.bytes.insert(bin.encoding.bytes.end(), data.begin(), data.end());
-                                    bin.encoding.size += data.size();
-                                } else {
-                                    vhxcc::error("illegal operands", expr.token);
-                                    continue;
-                                }
+                                bin.size += 2;
+                                bin.operands.push_back(child.expr);
+                                // parser::expression expr = fold_and_validate(child.expr);
+                                // if (expr.type == parser::expression::literal) {
+                                //     uint64_t val = std::stoll(expr.token.lexeme());
+                                //     if (val > 0xffff) {
+                                //         vhxcc::warn(std::format("value {:#x} truncated to {:#x}", val, val & 0xffff), expr.token);
+                                //         val = val & 0xffff;
+                                //     }
+                                //     std::vector<char> data = itob(val, 2);
+                                //     bin.encoding.bytes.insert(bin.encoding.bytes.end(), data.begin(), data.end());
+                                //     bin.encoding.size += data.size();
+                                // } else {
+                                //     vhxcc::error("illegal operands", expr.token);
+                                //     continue;
+                                // }
                             }
                             section.pointer += bin.size;
                             section.nodes.push_back(bin);
                         } else if (node.name == ".int" || node.name == ".word") {
                             binary_node bin;
                             bin.type = binary_node::binary;
+                            bin.name = node.name;
                             bin.encoding.is_valid = true;
                             bin.encoding.can_relax = false;
                             bin.encoding.mneumonic = node.name;
                             bin.encoding.relax = 0;
                             bin.size = 0;
                             for (const ast& child : node.children) {
-                                parser::expression expr = fold_and_validate(child.expr);
-                                if (expr.type == parser::expression::literal) {
-                                    uint64_t val = std::stoll(expr.token.lexeme());
-                                    if (val > 0xffffffffULL) {
-                                        vhxcc::warn(std::format("value {:#x} truncated to {:#x}", val, val & 0xffffffffULL), expr.token);
-                                        val = val & 0xffffffffULL;
-                                    }
-                                    std::vector<char> data = itob(val, 4);
-                                    bin.encoding.bytes.insert(bin.encoding.bytes.end(), data.begin(), data.end());
-                                    bin.encoding.size += data.size();
-                                } else if (expr.type != parser::expression::none) {
-                                    vhxcc::relocation reloc;
-                                    reloc.type = relocation::vhx_abs32;
-                                    reloc.offset = bin.size;
-                                    reloc.addend = 0;
-                                    if (expr.type == parser::expression::identifier) {
-                                        reloc.symbol = expr.token.lexeme();
-                                    } else if (expr.type == parser::expression::binary) {
-                                        reloc.symbol = expr.branches[0].token.lexeme();
-                                        reloc.addend = std::stoll(expr.branches[1].token.lexeme());
-                                        if (expr.token == token::minus)
-                                            reloc.addend = -reloc.addend;
-                                    }
-                                    bin.encoding.relocations.push_back(reloc);
-                                    std::vector<char> data = itob(0, 4);
-                                    bin.encoding.bytes.insert(bin.encoding.bytes.end(), data.begin(), data.end());
-                                    bin.encoding.size += data.size();
-                                }
+                                bin.size += 4;
+                                bin.operands.push_back(child.expr);
+                                // parser::expression expr = fold_and_validate(child.expr);
+                                // if (expr.type == parser::expression::literal) {
+                                //     uint64_t val = std::stoll(expr.token.lexeme());
+                                //     if (val > 0xffffffffULL) {
+                                //         vhxcc::warn(std::format("value {:#x} truncated to {:#x}", val, val & 0xffffffffULL), expr.token);
+                                //         val = val & 0xffffffffULL;
+                                //     }
+                                //     std::vector<char> data = itob(val, 4);
+                                //     bin.encoding.bytes.insert(bin.encoding.bytes.end(), data.begin(), data.end());
+                                //     bin.encoding.size += data.size();
+                                // } else if (expr.type != parser::expression::none) {
+                                //     vhxcc::relocation reloc;
+                                //     reloc.type = relocation::vhx_abs32;
+                                //     reloc.offset = bin.size;
+                                //     reloc.addend = 0;
+                                //     if (expr.type == parser::expression::identifier) {
+                                //         reloc.symbol = expr.token.lexeme();
+                                //     } else if (expr.type == parser::expression::binary) {
+                                //         reloc.symbol = expr.branches[0].token.lexeme();
+                                //         reloc.addend = std::stoll(expr.branches[1].token.lexeme());
+                                //         if (expr.token == token::minus)
+                                //             reloc.addend = -reloc.addend;
+                                //     }
+                                //     bin.encoding.relocations.push_back(reloc);
+                                //     std::vector<char> data = itob(0, 4);
+                                //     bin.encoding.bytes.insert(bin.encoding.bytes.end(), data.begin(), data.end());
+                                //     bin.encoding.size += data.size();
+                                // }
                             }
                             section.pointer += bin.size;
                             section.nodes.push_back(bin);
                         } else if (node.name == ".long" || node.name == ".quad" || node.name == ".qword") {
                             binary_node bin;
                             bin.type = binary_node::binary;
+                            bin.name = node.name;
                             bin.encoding.is_valid = true;
                             bin.encoding.can_relax = false;
                             bin.encoding.mneumonic = node.name;
                             bin.encoding.relax = 0;
                             bin.size = 0;
                             for (const ast& child : node.children) {
-                                parser::expression expr = fold_and_validate(child.expr);
-                                if (expr.type == parser::expression::literal) {
-                                    uint64_t val = std::stoll(expr.token.lexeme());
-                                    std::vector<char> data = itob(val, 8);
-                                    bin.encoding.bytes.insert(bin.encoding.bytes.end(), data.begin(), data.end());
-                                    bin.encoding.size += data.size();
-                                } else if (expr.type != parser::expression::none) {
-                                    vhxcc::relocation reloc;
-                                    reloc.type = relocation::vhx_abs64;
-                                    reloc.offset = bin.size;
-                                    reloc.addend = 0;
-                                    if (expr.type == parser::expression::identifier) {
-                                        reloc.symbol = expr.token.lexeme();
-                                    } else if (expr.type == parser::expression::binary) {
-                                        reloc.symbol = expr.branches[0].token.lexeme();
-                                        reloc.addend = std::stoll(expr.branches[1].token.lexeme());
-                                        if (expr.token == token::minus)
-                                            reloc.addend = -reloc.addend;
-                                    }
-                                    bin.encoding.relocations.push_back(reloc);
-                                    std::vector<char> data = itob(0, 8);
-                                    bin.encoding.bytes.insert(bin.encoding.bytes.end(), data.begin(), data.end());
-                                    bin.encoding.size += data.size();
-                                }
+                                bin.size += 8;
+                                bin.operands.push_back(child.expr);
+                                // parser::expression expr = fold_and_validate(child.expr);
+                                // if (expr.type == parser::expression::literal) {
+                                //     uint64_t val = std::stoll(expr.token.lexeme());
+                                //     std::vector<char> data = itob(val, 8);
+                                //     bin.encoding.bytes.insert(bin.encoding.bytes.end(), data.begin(), data.end());
+                                //     bin.encoding.size += data.size();
+                                // } else if (expr.type != parser::expression::none) {
+                                //     vhxcc::relocation reloc;
+                                //     reloc.type = relocation::vhx_abs64;
+                                //     reloc.offset = bin.size;
+                                //     reloc.addend = 0;
+                                //     if (expr.type == parser::expression::identifier) {
+                                //         reloc.symbol = expr.token.lexeme();
+                                //     } else if (expr.type == parser::expression::binary) {
+                                //         reloc.symbol = expr.branches[0].token.lexeme();
+                                //         reloc.addend = std::stoll(expr.branches[1].token.lexeme());
+                                //         if (expr.token == token::minus)
+                                //             reloc.addend = -reloc.addend;
+                                //     }
+                                //     bin.encoding.relocations.push_back(reloc);
+                                //     std::vector<char> data = itob(0, 8);
+                                //     bin.encoding.bytes.insert(bin.encoding.bytes.end(), data.begin(), data.end());
+                                //     bin.encoding.size += data.size();
+                                // }
                             }
                             section.pointer += bin.size;
                             section.nodes.push_back(bin);
@@ -1694,6 +1716,7 @@ int main(int argc, const char *argv[]) {
                             }
                             binary_node bin;
                             bin.type = binary_node::binary;
+                            bin.name = node.name;
                             bin.encoding.is_valid = true;
                             bin.encoding.can_relax = false;
                             bin.encoding.mneumonic = node.name;
@@ -1731,6 +1754,9 @@ int main(int argc, const char *argv[]) {
                         binary_node bin;
                         bin.type = binary_node::label;
                         bin.name = node.name;
+                        label_info info;
+                        info.section = section_name;
+                        info.offset = section.pointer;
                         section.nodes.push_back(bin);
                     } break;
                     default:
@@ -1738,7 +1764,314 @@ int main(int argc, const char *argv[]) {
                 }
             }
         }
-        
+
+        if (errored)
+            return 1;
+
+        bool changed = false;
+        int step = 0;
+        do {
+            // If relaxation is disabled, run exactly 1 pass; otherwise cap at 128 passes to prevent infinite loops
+            if ((step > 0 && !opts.relax) || step >= 128)
+                break;
+            
+            labels_info.clear();
+            changed = false;
+
+            // 1. Calculate offsets pass: Walk all nodes and populate label addresses
+            for (auto& [name, info] : sections_final) {
+                std::size_t pointer = 0;
+                for (auto& bin : info.nodes) {
+                    if (bin.type == binary_node::label) {
+                        labels_info[bin.name] = label_info{name, pointer};
+                    } 
+                    else if (bin.type == binary_node::org) {
+                        // bin.size can store the target absolute address or offset for .org
+                        if (bin.size < pointer) {
+                            // Handled during parsing/validation, but safe guard here
+                            pointer = bin.size; // or trigger error
+                        } else {
+                            pointer = bin.size;
+                        }
+                    } 
+                    else if (bin.type == binary_node::align) {
+                        // bin.size stores alignment boundary (e.g., 4, 8, 16)
+                        std::size_t align_val = bin.size;
+                        if (align_val > 0) {
+                            std::size_t remainder = pointer % align_val;
+                            if (remainder != 0) {
+                                pointer += (align_val - remainder);
+                            }
+                        }
+                    } 
+                    else {
+                        // binary data or opcode instruction contributes to size
+                        pointer += bin.size;
+                    }
+                }
+                info.pointer = pointer;
+            }
+
+            // If relaxation is turned off, we only needed Pass 1 to lock in label addresses
+            if (!opts.relax) {
+                break;
+            }
+
+            // 2. Relax pass: Re-evaluate instruction sizes now that label addresses are known
+            for (auto& [name, info] : sections_final) {
+                std::size_t pointer = 0;
+                for (auto& bin : info.nodes) {
+                    if (bin.type == binary_node::opcode) {
+                        if (bin.encoding.can_relax) {
+                            std::vector<parser::expression> operands;
+                            for (const auto& expr : bin.operands) {
+                                operands.push_back(fold_and_validate(expr));
+                            }
+                            encode_result res = encode_mneumonic(bin.name, operands, pointer);
+                            if (res.is_valid) {
+                                bin.size = res.bytes.size();
+                                bin.encoding = res;
+                                changed = true; // Size changed, another iteration is required!
+                            }
+                        }
+                    }
+
+                    // Keep pointer tracking in sync during the relaxation pass for PC-relative checks
+                    if (bin.type == binary_node::label) {
+                        // Labels contribute 0 size
+                    } else if (bin.type == binary_node::org) {
+                        pointer = bin.size;
+                    } else if (bin.type == binary_node::align) {
+                        std::size_t align_val = bin.size;
+                        if (align_val > 0) {
+                            std::size_t remainder = pointer % align_val;
+                            if (remainder != 0) {
+                                pointer += (align_val - remainder);
+                            }
+                        }
+                    } else {
+                        pointer += bin.size;
+                    }
+                }
+            }
+
+            step++;
+        } while (changed);
+
+        for (auto& [name, info] : sections_final) {
+            section_final& section = sections_final[section_name];
+            for (auto& node : asts) {
+                switch (node.type) {
+                    case ast::directive: {
+                        if (node.name == ".byte") {
+                            binary_node bin;
+                            bin.name = node.name;
+                            bin.type = binary_node::binary;
+                            bin.encoding.is_valid = true;
+                            bin.encoding.can_relax = false;
+                            bin.encoding.mneumonic = node.name;
+                            bin.encoding.relax = 0;
+                            bin.size = 0;
+                            for (const ast& child : node.children) {
+                                bin.size += 1;
+                                bin.operands.push_back(child.expr);
+                                // parser::expression expr = fold_and_validate(child.expr);
+                                // if (expr.type == parser::expression::literal) {
+                                //     uint64_t val = std::stoll(expr.token.lexeme());
+                                //     if (val > 0xff) {
+                                //         vhxcc::warn(std::format("value {:#x} truncated to {:#x}", val, val & 0xff), expr.token);
+                                //         val = val & 0xff;
+                                //     }
+                                //     std::vector<char> data = itob(val, 1);
+                                //     bin.encoding.bytes.insert(bin.encoding.bytes.end(), data.begin(), data.end());
+                                //     bin.encoding.size += data.size();
+                                // } else {
+                                //     vhxcc::error("illegal operands", expr.token);
+                                //     continue;
+                                // }
+                            }
+                            section.pointer += bin.size;
+                            section.nodes.push_back(bin);
+                        } else if (node.name == ".short" || node.name == ".half" || node.name == ".hword") {
+                            binary_node bin;
+                            bin.type = binary_node::binary;
+                            bin.name = node.name;
+                            bin.encoding.is_valid = true;
+                            bin.encoding.can_relax = false;
+                            bin.encoding.mneumonic = node.name;
+                            bin.encoding.relax = 0;
+                            bin.size = 0;
+                            for (const ast& child : node.children) {
+                                bin.size += 2;
+                                bin.operands.push_back(child.expr);
+                                // parser::expression expr = fold_and_validate(child.expr);
+                                // if (expr.type == parser::expression::literal) {
+                                //     uint64_t val = std::stoll(expr.token.lexeme());
+                                //     if (val > 0xffff) {
+                                //         vhxcc::warn(std::format("value {:#x} truncated to {:#x}", val, val & 0xffff), expr.token);
+                                //         val = val & 0xffff;
+                                //     }
+                                //     std::vector<char> data = itob(val, 2);
+                                //     bin.encoding.bytes.insert(bin.encoding.bytes.end(), data.begin(), data.end());
+                                //     bin.encoding.size += data.size();
+                                // } else {
+                                //     vhxcc::error("illegal operands", expr.token);
+                                //     continue;
+                                // }
+                            }
+                            section.pointer += bin.size;
+                            section.nodes.push_back(bin);
+                        } else if (node.name == ".int" || node.name == ".word") {
+                            binary_node bin;
+                            bin.type = binary_node::binary;
+                            bin.name = node.name;
+                            bin.encoding.is_valid = true;
+                            bin.encoding.can_relax = false;
+                            bin.encoding.mneumonic = node.name;
+                            bin.encoding.relax = 0;
+                            bin.size = 0;
+                            for (const ast& child : node.children) {
+                                bin.size += 4;
+                                bin.operands.push_back(child.expr);
+                                // parser::expression expr = fold_and_validate(child.expr);
+                                // if (expr.type == parser::expression::literal) {
+                                //     uint64_t val = std::stoll(expr.token.lexeme());
+                                //     if (val > 0xffffffffULL) {
+                                //         vhxcc::warn(std::format("value {:#x} truncated to {:#x}", val, val & 0xffffffffULL), expr.token);
+                                //         val = val & 0xffffffffULL;
+                                //     }
+                                //     std::vector<char> data = itob(val, 4);
+                                //     bin.encoding.bytes.insert(bin.encoding.bytes.end(), data.begin(), data.end());
+                                //     bin.encoding.size += data.size();
+                                // } else if (expr.type != parser::expression::none) {
+                                //     vhxcc::relocation reloc;
+                                //     reloc.type = relocation::vhx_abs32;
+                                //     reloc.offset = bin.size;
+                                //     reloc.addend = 0;
+                                //     if (expr.type == parser::expression::identifier) {
+                                //         reloc.symbol = expr.token.lexeme();
+                                //     } else if (expr.type == parser::expression::binary) {
+                                //         reloc.symbol = expr.branches[0].token.lexeme();
+                                //         reloc.addend = std::stoll(expr.branches[1].token.lexeme());
+                                //         if (expr.token == token::minus)
+                                //             reloc.addend = -reloc.addend;
+                                //     }
+                                //     bin.encoding.relocations.push_back(reloc);
+                                //     std::vector<char> data = itob(0, 4);
+                                //     bin.encoding.bytes.insert(bin.encoding.bytes.end(), data.begin(), data.end());
+                                //     bin.encoding.size += data.size();
+                                // }
+                            }
+                            section.pointer += bin.size;
+                            section.nodes.push_back(bin);
+                        } else if (node.name == ".long" || node.name == ".quad" || node.name == ".qword") {
+                            binary_node bin;
+                            bin.type = binary_node::binary;
+                            bin.name = node.name;
+                            bin.encoding.is_valid = true;
+                            bin.encoding.can_relax = false;
+                            bin.encoding.mneumonic = node.name;
+                            bin.encoding.relax = 0;
+                            bin.size = 0;
+                            for (const ast& child : node.children) {
+                                bin.size += 8;
+                                bin.operands.push_back(child.expr);
+                                // parser::expression expr = fold_and_validate(child.expr);
+                                // if (expr.type == parser::expression::literal) {
+                                //     uint64_t val = std::stoll(expr.token.lexeme());
+                                //     std::vector<char> data = itob(val, 8);
+                                //     bin.encoding.bytes.insert(bin.encoding.bytes.end(), data.begin(), data.end());
+                                //     bin.encoding.size += data.size();
+                                // } else if (expr.type != parser::expression::none) {
+                                //     vhxcc::relocation reloc;
+                                //     reloc.type = relocation::vhx_abs64;
+                                //     reloc.offset = bin.size;
+                                //     reloc.addend = 0;
+                                //     if (expr.type == parser::expression::identifier) {
+                                //         reloc.symbol = expr.token.lexeme();
+                                //     } else if (expr.type == parser::expression::binary) {
+                                //         reloc.symbol = expr.branches[0].token.lexeme();
+                                //         reloc.addend = std::stoll(expr.branches[1].token.lexeme());
+                                //         if (expr.token == token::minus)
+                                //             reloc.addend = -reloc.addend;
+                                //     }
+                                //     bin.encoding.relocations.push_back(reloc);
+                                //     std::vector<char> data = itob(0, 8);
+                                //     bin.encoding.bytes.insert(bin.encoding.bytes.end(), data.begin(), data.end());
+                                //     bin.encoding.size += data.size();
+                                // }
+                            }
+                            section.pointer += bin.size;
+                            section.nodes.push_back(bin);
+                        } else if (node.name == ".float") {
+                            // TODO
+                        } else if (node.name == ".double") {
+                            // TODO
+                        } else if (node.name == ".ascii") {
+                            // TODO
+                        } else if (node.name == ".asciz" || node.name == ".string") {
+                            // TODO
+                        } else if (node.name == ".skip" || node.name == ".space") {
+                            // can only take absexprs
+                            parser::expression folded = constexpr_fold(node.children.front().expr, constexprs);
+                            std::size_t size = constexpr_value(folded).as_integer();
+                            char fill;
+                            if (node.children.size() == 2) {
+                                folded = constexpr_fold(node.children.back().expr, constexprs);
+                                fill = constexpr_value(folded).as_integer();
+                            } else {
+                                fill = 0;
+                            }
+                            binary_node bin;
+                            bin.type = binary_node::binary;
+                            bin.name = node.name;
+                            bin.encoding.is_valid = true;
+                            bin.encoding.can_relax = false;
+                            bin.encoding.mneumonic = node.name;
+                            bin.encoding.relax = 0;
+                            bin.size = size;
+                            bin.encoding.bytes.insert(bin.encoding.bytes.end(), size, fill);
+                            section.pointer += bin.size;
+                            section.nodes.push_back(bin);
+                        } else if (node.name == ".offset") {
+                            // TODO
+                        } else if (node.name == ".org") {
+                            // TODO
+                        } else if (node.name == ".align") {
+                            // TODO
+                        } else if (node.name == ".balign") {
+                            // TODO
+                        } else if (node.name == ".incbin") {
+                            // TODO
+                        }
+                    } break;
+                    case ast::instruction: {
+                        binary_node bin;
+                        bin.type = binary_node::opcode;
+                        bin.name = node.name;
+                        bin.encoding = query_mneumonic(node.name);
+                        if (!bin.encoding.is_valid) {
+                            vhxcc::error(std::format("unknown mneumonic `{}'", node.name), token(token::identifier, node.name, node.pos));
+                            continue;
+                        }
+                        bin.size = bin.encoding.size;
+                        section.pointer += bin.size;
+                        section.nodes.push_back(bin);
+                    } break;
+                    case ast::label: {
+                        binary_node bin;
+                        bin.type = binary_node::label;
+                        bin.name = node.name;
+                        label_info info;
+                        info.section = section_name;
+                        info.offset = section.pointer;
+                        section.nodes.push_back(bin);
+                    } break;
+                    default:
+                        break;
+                }
+            }
+        }
 
     } catch (const vhxcc::compile_error& e) {
         std::cerr << std::format("{}{}:{}:{}: {}error:{} {}", BOLD, e.token().pos().file, e.token().pos().line, e.token().pos().column, RED, RESET, e.what()) << std::endl;
