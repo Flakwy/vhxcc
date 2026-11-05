@@ -37,6 +37,15 @@ CC_OBJS	 := $(filter-out $(BDIR)/vhx-as.o, $(OBJS))
 .PHONY: all
 all: release
 
+push:
+	git add .
+	git commit --allow-empty-message -m ""
+	git push origin main
+
+pull:
+	git fetch --force
+	git reset --hard origin/main
+
 $(TARGET_AS): $(AS_OBJS)
 	$(CXX) $(LDFLAGS) -o $@ $^
 
