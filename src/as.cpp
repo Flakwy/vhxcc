@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <format>
 #include <functional>
+#include <ios>
 #include <lexer.hpp>
 #include <filesystem>
 #include <fstream>
@@ -40,7 +41,7 @@ struct ast {
     std::vector<ast> children;
 };
 
-static const std::string help = R"(Usage: vhx64-as [option...] [asmfile...]
+static const std::string help = R"(Usage: vhx64-none-vxo-as [option...] [asmfile...]
 Options:
   --help                  show all assembler options and exit
   -c                      compile only, do not link
@@ -51,13 +52,17 @@ Options:
   -W, --no-warn           suppress warnings
   -Werror                 treat warnings as errors
 VHX options:
-  -mabi=<abi name>        specify for ABI <abi name>
-  -march=<arch name>      assemble for architecture <arch name>;
-  -mrelax                 enable relax (default)
-  -mno-relax              disable relax
-  -mbig-endian            assemble for big-endian
-  -mlittle-endian         assemble for little-endian
-)";
+  -fpic or -fPIC            generate position-independent code
+  -fno-pic                  don't generate position-independent code (default)
+  -march=<arch name>        set the VHX architecture
+  -misa-spec=ISAspec        set the VHX ISA spec (1.0, 20240703, 20261105)
+  -mabi=<abi name>          set the RISC-V ABI
+  -mrelax                   enable relax (default)
+  -mno-relax                disable relax
+  -mbig-endian              assemble for big-endian
+  -mlittle-endian           assemble for little-endian
+
+Report bugs to <https://github.com/Flakwy/vhxcc/issues/>)";
 
 #ifndef HOSTNAME
 #define HOSTNAME "unknown"
@@ -80,6 +85,7 @@ struct opts {
     std::vector<std::pair<std::string, std::string>> defines;
     std::vector<std::filesystem::path> include_dirs;
     std::string entry = "_start";
+    bool link = true;
     bool relax = true;
     bool help = false;
     bool version = false;
@@ -684,6 +690,8 @@ int main(int argc, const char *argv[]) {
         } else if (arg == "-help" || arg == "--help") {
             std::cout << help << std::endl;
             return 0;
+        } else if (arg == "-c") {
+            opts.link = false;
         } else if (arg.substr(0, 2) == "-I") {
             // Handle include directory option
             if (arg == "-I") {
@@ -770,8 +778,14 @@ int main(int argc, const char *argv[]) {
     }
 
     std::vector<std::filesystem::path> input_files;
+    std::vector<vhxcc::object> input_objects;
     for (const auto &input : opts.inputs) {
-        input_files.push_back(input);
+        if (input.extension() == ".s" || input.extension() == ".S") {
+            input_files.push_back(input);
+        } else if (input.extension() == ".o") {
+            std::ifstream file(input);
+            input_objects.push_back(vhxcc::object(file));
+        }
     }
 
     vhxcc::source source;
@@ -1004,61 +1018,18 @@ int main(int argc, const char *argv[]) {
         std::vector<std::unique_ptr<vhxcc::lexer>> include_lexers;
     
         std::vector<ast> asts;
-        auto parse_assembly_name = [](vhxcc::lexer::iterator& it) {
-            parser::expression name_expr;
-            vhxcc::lexer::iterator start = it;
-            token first = lexer::match(it, token::dot, token::identifier);
-            if (!first)
-                return name_expr;
-
-            const position start_pos = first.pos();
-            std::string name;
-            token previous = first;
-            if (first == token::dot) {
-                token part = lexer::match(it, token::identifier);
-                if (!part || part.pos().line != first.pos().line ||
-                    part.pos().column != first.pos().column + first.lexeme().size()) {
-                    it = start;
-                    return name_expr;
-                }
-                name = "." + part.lexeme();
-                previous = part;
-            } else {
-                name = first.lexeme();
-            }
-
-            while (true) {
-                vhxcc::lexer::iterator before_dot = it;
-                token dot = lexer::match(it, token::dot);
-                if (!dot || dot.pos().line != previous.pos().line ||
-                    dot.pos().column != previous.pos().column + previous.lexeme().size()) {
-                    it = before_dot;
-                    break;
-                }
-                token part = lexer::match(it, token::identifier);
-                if (!part || part.pos().line != dot.pos().line ||
-                    part.pos().column != dot.pos().column + dot.lexeme().size()) {
-                    it = before_dot;
-                    break;
-                }
-                name += dot.lexeme() + part.lexeme();
-                previous = part;
-            }
-
-            name_expr.type = parser::expression::identifier;
-            name_expr.token = token(token::identifier, name, start_pos);
-            return name_expr;
-        };
 
         // Parse the source code into an abstract syntax tree (AST)
         vhxcc::lexer::iterator it = lexer.begin();
+        std::size_t include_level = 0;
         while (it != lexer.end()) {
             // Process each token from the lexer
 
             while (lexer::match(it, vhxcc::token::semicolon))
                 ;
 
-            parser::expression expr = parse_assembly_name(it);
+            auto old = it;
+            parser::expression expr = parser::parse_expression(it, true);
             if (expr.type == parser::expression::identifier) {
                 if (lexer::match(it, vhxcc::token::colon)) {
                     // label
@@ -1080,6 +1051,9 @@ int main(int argc, const char *argv[]) {
                         vhxcc::source& source = *include_sources.emplace_back(std::make_unique<vhxcc::source>(filename));
                         vhxcc::lexer& lexer = *include_lexers.emplace_back(std::make_unique<vhxcc::lexer>(source));
                         // Recursively parse the included file
+                        if (++include_level >= 2048)
+                            throw vhxcc::compile_error("recursion limit exceeded", token(token::identifier, ".include", ast.pos));
+                        // std::cout << include_level << std::endl;
                         it = lexer::iterator(lexer.begin(), it);
                     } else {
                         ast.pos = expr.token.pos();
@@ -1090,16 +1064,17 @@ int main(int argc, const char *argv[]) {
                     // assignment to a label or symbol
                     ast node;
                     node.type = ast::type::directive;
-                    node.name = "equ";
+                    node.name = ".set";
                     ast label;
-                    label.type = ast::type::label;
-                    label.name = expr.token.lexeme();
+                    label.type = ast::type::expression;
+                    label.expr = expr;
                     node.children.push_back(std::move(label));
                     ast child;
                     child.type = ast::type::expression;
                     child.expr = parser::expect_expression(it, true);
                     node.children.push_back(std::move(child));
                     node.pos = expr.token.pos();
+                    std::cout << label.name << " = expr" << std::endl;
                     asts.push_back(node);
                     continue;
                 } else {
@@ -1122,6 +1097,26 @@ int main(int argc, const char *argv[]) {
                     asts.push_back(node);
                     continue;
                 }
+            } else if (expr.type == parser::expression::binary) {
+                if (expr.token == token::assign && expr.branches[0].type == parser::expression::identifier) {
+                    // assignment to a label or symbol
+                    ast node;
+                    node.type = ast::type::directive;
+                    node.name = ".set";
+                    ast label;
+                    label.type = ast::type::expression;
+                    label.expr = expr.branches[0];
+                    node.children.push_back(std::move(label));
+                    ast child;
+                    child.type = ast::type::expression;
+                    child.expr = expr.branches[1];
+                    node.children.push_back(std::move(child));
+                    node.pos = expr.token.pos();
+                    asts.push_back(node);
+                    continue;
+                }
+            } else {
+                it = old;
             }
 
             // error matches GNU assembler error format
@@ -1223,6 +1218,7 @@ int main(int argc, const char *argv[]) {
         };
         std::vector<if_block_state> cond_stack = {{true, true}};
         std::unordered_map<std::string, parser::expression> constexprs;
+        std::unordered_map<std::string, parser::expression> labelexprs;
 
         for (auto& ast : asts) {
             expand_builtins(ast, builtins);
@@ -1233,7 +1229,7 @@ int main(int argc, const char *argv[]) {
                 if (ast.name == ".ifdef") {
                     bool cond = defined.contains(ast.children.front().expr.token.lexeme());
                     cond_stack.push_back({parent_active && cond, cond});
-                    continue; // Do not emit the directive itself into sections
+                    continue;
                 }
                 else if (ast.name == ".ifndef" || ast.name == ".ifnotdef") {
                     bool cond = !defined.contains(ast.children.front().expr.token.lexeme());
@@ -1242,7 +1238,7 @@ int main(int argc, const char *argv[]) {
                 }
                 else if (ast.name == ".if") {
                     parser::expression folded = constexpr_fold(ast.children.front().expr, constexprs);
-                    bool cond = (bool)constexpr_value(folded);
+                    bool cond = constexpr_value(folded) != constexpr_value(0);
                     cond_stack.push_back({parent_active && cond, cond});
                     continue;
                 }
@@ -1288,6 +1284,7 @@ int main(int argc, const char *argv[]) {
                     } else {
                         defined.insert(symbol_name);
                         parser::expression folded = constexpr_fold(ast.children[1].expr, constexprs);
+                        labelexprs[symbol_name] = ast.children[1].expr;
                         if (folded.type != parser::expression::none) {
                             constexpr_value folded_value = folded;
                             constexprs[symbol_name] = folded;
@@ -1695,7 +1692,7 @@ int main(int argc, const char *argv[]) {
                     const int64_t min_value = -(int64_t{1} << (bits - 1));
                     const uint64_t max_value = (uint64_t{1} << bits) - 1;
                     if (value < min_value || (value >= 0 && static_cast<uint64_t>(value) > max_value)) {
-                        vhxcc::warn(std::format("value {} truncated to {} bytes", value, width), expr.token);
+                        vhxcc::warn(std::format("value {:#x} truncated to {:#x}", value, value & ((1ULL << bits) - 1)), expr.token);
                     }
                 }
                 auto bytes = itob(static_cast<uint64_t>(value), width);
@@ -2152,11 +2149,19 @@ int main(int argc, const char *argv[]) {
             info.pointer = pointer;
         }
 
+        vhxcc::object obj;
+        obj.arch(opts.arch);
+        obj.platform("linux");
+        obj.entry(opts.entry);
+
         for (auto& [name, info] : sections_final) {
             std::size_t pointer = 0;
+            obj.section(name, 16);
             for (binary_node& bin : info.nodes) {
-                if (bin.type == binary_node::label)
+                if (bin.type == binary_node::label) {
+                    obj.define(name, bin.name, pointer);
                     continue;
+                }
 
                 if (bin.type == binary_node::org) {
                     const std::size_t target = std::max(pointer, bin.size);
@@ -2166,6 +2171,7 @@ int main(int argc, const char *argv[]) {
                     bin.encoding.bytes.resize(target - pointer, 0);
                     bin.encoding.size = bin.encoding.bytes.size();
                     pointer = target;
+                    obj.append(name, bin.encoding.bytes);
                     continue;
                 }
 
@@ -2178,6 +2184,7 @@ int main(int argc, const char *argv[]) {
                     bin.encoding.bytes.resize(padding, 0);
                     bin.encoding.size = padding;
                     pointer += padding;
+                    obj.append(name, bin.encoding.bytes);
                     continue;
                 }
 
@@ -2210,7 +2217,11 @@ int main(int argc, const char *argv[]) {
                     bin.encoding = std::move(encoding);
                     bin.size = encoded_size;
                     bin.encoding.size = bin.size;
+                    for (auto& reloc : bin.encoding.relocations) {
+                        obj.relocation(name, reloc.symbol, reloc.type, pointer + reloc.offset, reloc.addend);
+                    }
                     pointer += bin.size;
+                    obj.append(name, bin.encoding.bytes);
                     continue;
                 }
 
@@ -2274,11 +2285,21 @@ int main(int argc, const char *argv[]) {
                     }
                     bin.size = bin.encoding.bytes.size();
                     bin.encoding.size = bin.size;
+                    for (auto& reloc : bin.encoding.relocations) {
+                        obj.relocation(name, reloc.symbol, reloc.type, pointer + reloc.offset, reloc.addend);
+                    }
                     pointer += bin.size;
+                    obj.append(name, bin.encoding.bytes);
                     continue;
                 }
             }
             info.pointer = pointer;
+
+            while (!input_objects.empty()) {
+                const vhxcc::object& inp = input_objects.back();
+                obj << inp;
+                input_objects.pop_back();
+            }
 
             // for (auto& node : asts) {
             //     switch (node.type) {
@@ -2494,14 +2515,14 @@ int main(int argc, const char *argv[]) {
         }
 
         if (warnings > 0 && opts.fatal_warnings) {
-            if (warnings == 1)
-                vhxcc::error("1 warning, treating warnings as errors");
-            else
-                vhxcc::error(std::format("{} warnings, treating warnings as errors", warnings));
+            vhxcc::error(std::format("{} warning{}, treating warnings as errors", warnings, warnings == 1 ? "" : "s"));
         }
         
         if (errored)
             return 1;
+
+        std::ofstream output(opts.output, std::ios::binary);
+        obj >> output;
 
     } catch (const vhxcc::compile_error& e) {
         std::cerr << std::format("{}{}:{}:{}: {}fatal error:{} {}", BOLD, e.token().pos().file, e.token().pos().line, e.token().pos().column, RED, RESET, e.what()) << std::endl;

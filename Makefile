@@ -28,37 +28,37 @@ OBJS_CXX := $(patsubst $(SDIR)/%.cpp,$(BDIR)/%.o,$(SRCS_CXX))
 OBJS     := $(OBJS_C) $(OBJS_CXX)
 DEPS     := $(OBJS:.o=.d)
 
-TARGET_CC   := vhx-cc
-TARGET_AS	:= vhx-as
+TARGET_CC   := vhx64-none-vxo-cc
+TARGET_AS	:= vhx64-none-vxo-as
+TARGET_LD	:= vhx64-none-vxo-ld
 
-AS_OBJS	 := $(filter-out $(BDIR)/vhx-cc.o, $(OBJS))
-CC_OBJS	 := $(filter-out $(BDIR)/vhx-as.o, $(OBJS))
+AS_OBJS	 := $(filter-out $(BDIR)/cc.o $(BDIR)/ld.o, $(OBJS))
+CC_OBJS	 := $(filter-out $(BDIR)/as.o $(BDIR)/ld.o, $(OBJS))
+LD_OBJS	 := $(filter-out $(BDIR)/as.o $(BDIR)/cc.o, $(OBJS))
 
 .PHONY: all
 all: release
-
-push:
-	git add .
-	git commit --allow-empty-message -m ""
-	git push origin main
 
 pull:
 	git fetch --force
 	git reset --hard origin/main
 
-$(TARGET_AS): $(AS_OBJS)
+$(TARGET_LD): $(LD_OBJS)
 	$(CXX) $(LDFLAGS) -o $@ $^
 
-$(TARGET_CC): $(CC_OBJS) | $(TARGET_AS)
+$(TARGET_AS): $(AS_OBJS) | $(TARGET_LD)
+	$(CXX) $(LDFLAGS) -o $@ $^
+
+$(TARGET_CC): $(CC_OBJS) | $(TARGET_AS) $(TARGET_LD)
 	$(CXX) $(LDFLAGS) -o $@ $^
 
 # Target to tag a new version in your repository
-release: $(TARGET_CC) $(TARGET_AS)
+release: $(TARGET_CC) $(TARGET_AS) $(TARGET_LD)
 	git tag $(NEXT_VERSION)
 	git push origin $(NEXT_VERSION)
 	@echo "Release build complete"
 
-debug: $(TARGET_CC) $(TARGET_AS)
+debug: $(TARGET_CC) $(TARGET_AS) $(TARGET_LD)
 	@echo "Debug build complete"
 
 $(BDIR)/%.o: $(SDIR)/%.cpp | $(BDIR)

@@ -211,13 +211,15 @@ using reloc = vhxcc::relocation;
 // queries
 // ==================================================================================
 
-static encode_result query_alu_rrr(const std::string& mneumonic) {
+static encode_result query_alu(const std::string& mneumonic) {
     encode_result res;
     res.is_valid = (
         mneumonic == "swp" || mneumonic == "add" || mneumonic == "sub" ||
         mneumonic == "or" || mneumonic == "and" || mneumonic == "xor" ||
         mneumonic == "sll" || mneumonic == "srl" || mneumonic == "sra" ||
-        mneumonic == "mv" || mneumonic == "bl" || mneumonic == "nop" || mneumonic == "brlr"
+        mneumonic == "mv" || mneumonic == "bl" || mneumonic == "nop" || mneumonic == "brlr" ||
+        mneumonic == "addi" || mneumonic == "ori" || mneumonic == "andi" || mneumonic == "xori" ||
+        mneumonic == "slli" || mneumonic == "srli" || mneumonic == "srai"
     );
     res.can_relax = false;
     res.relax = 0;
@@ -343,7 +345,80 @@ static encode_result encode_alu_rrr(const std::string &mneumonic, const std::vec
             (rm.index << 11) |
             (func4 << 16) |
             (rn.index << 20)
-        ), 4); // Placeholder for actual encoding
+        ), 4);
+    } else {
+        res.bytes = pack(0, 4);
+    }
+    return res;
+}
+
+static encode_result encode_alu_rri(const std::string &mneumonic, const std::vector<vhxcc::parser::expression> &operands, std::size_t pointer, int relax) {
+    encode_result res;
+    res.mneumonic = mneumonic;
+    res.can_relax = false;
+    res.relax = 0;
+    res.size = 4;
+    static constexpr uint32_t opc6 = 0x00;
+    uint32_t func4 = 0x00;
+    operand rd, rm, imm12;
+    size_t count = reduce_operands(operands, rd, rm, imm12);
+
+    res.is_valid = false;
+    switch (strhash(mneumonic)) {
+        case strhash("addi"):
+            if (count == 3 && rd.type == operand::_register && rm.type == operand::_register && imm12.type == operand::_constant) {
+                func4 = 0x09;
+                res.is_valid = true;
+            }
+            break;
+        case strhash("ori"):
+            if (count == 3 && rd.type == operand::_register && rm.type == operand::_register && imm12.type == operand::_constant) {
+                func4 = 0x0a;
+                res.is_valid = true;
+            }
+            break;
+        case strhash("andi"):
+            if (count == 3 && rd.type == operand::_register && rm.type == operand::_register && imm12.type == operand::_constant) {
+                func4 = 0x0b;
+                res.is_valid = true;
+            }
+            break;
+        case strhash("xori"):
+            if (count == 3 && rd.type == operand::_register && rm.type == operand::_register && imm12.type == operand::_constant) {
+                func4 = 0x0c;
+                res.is_valid = true;
+            }
+            break;
+        case strhash("slli"):
+            if (count == 3 && rd.type == operand::_register && rm.type == operand::_register && imm12.type == operand::_constant) {
+                func4 = 0x0d;
+                res.is_valid = true;
+            }
+            break;
+        case strhash("srli"):
+            if (count == 3 && rd.type == operand::_register && rm.type == operand::_register && imm12.type == operand::_constant) {
+                func4 = 0x0e;
+                res.is_valid = true;
+            }
+            break;
+        case strhash("srai"):
+            if (count == 3 && rd.type == operand::_register && rm.type == operand::_register && imm12.type == operand::_constant) {
+                func4 = 0x0f;
+                res.is_valid = true;
+            }
+            break;
+        default:
+            break;
+    }
+
+    if (res.is_valid) {
+        res.bytes = pack((
+            (opc6 << 0) |
+            (rd.index << 6) |
+            (rm.index << 11) |
+            (func4 << 16) |
+            (imm12.constant << 20)
+        ), 4);
     } else {
         res.bytes = pack(0, 4);
     }
@@ -374,23 +449,37 @@ static const std::unordered_map<std::string, encoder_fn> encoder_map = {
     {"xor", encode_alu_rrr},
     {"sll", encode_alu_rrr},
     {"srl", encode_alu_rrr},
-    {"sra", encode_alu_rrr}
+    {"sra", encode_alu_rrr},
+    {"addi", encode_alu_rri},
+    {"ori", encode_alu_rri},
+    {"andi", encode_alu_rri},
+    {"xori", encode_alu_rri},
+    {"slli", encode_alu_rri},
+    {"srli", encode_alu_rri},
+    {"srai", encode_alu_rri},
 };
 
 static const std::unordered_map<std::string, query_fn> query_map = {
-    {"swp", query_alu_rrr},
-    {"add", query_alu_rrr},
-    {"mv", query_alu_rrr},
-    {"bl", query_alu_rrr},
-    {"brlr", query_alu_rrr},
-    {"nop", query_alu_rrr},
-    {"sub", query_alu_rrr},
-    {"or", query_alu_rrr},
-    {"and", query_alu_rrr},
-    {"xor", query_alu_rrr},
-    {"sll", query_alu_rrr},
-    {"srl", query_alu_rrr},
-    {"sra", query_alu_rrr}
+    {"swp", query_alu},
+    {"add", query_alu},
+    {"mv", query_alu},
+    {"bl", query_alu},
+    {"brlr", query_alu},
+    {"nop", query_alu},
+    {"sub", query_alu},
+    {"or", query_alu},
+    {"and", query_alu},
+    {"xor", query_alu},
+    {"sll", query_alu},
+    {"srl", query_alu},
+    {"sra", query_alu},
+    {"addi", query_alu},
+    {"ori", query_alu},
+    {"andi", query_alu},
+    {"xori", query_alu},
+    {"slli", query_alu},
+    {"srli", query_alu},
+    {"srai", query_alu},
 };
 
 encode_result vhxcc::query_mneumonic(const std::string& mneumonic) {

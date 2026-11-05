@@ -1,2 +1,5 @@
-test:
-.byte 0x123
+
+test = 5
+.ifdef test
+.err
+.endif

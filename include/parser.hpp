@@ -465,25 +465,16 @@ private:
             expression node;
             vhxcc::position pos;
             node.type = expression::identifier;
-            if ((tok = lexer::match(it, token::dot))) {
-                pos = tok.pos();
+            tok = lexer::match(it, token::identifier, token::dot);
+            if (tok) {
                 name += tok.lexeme();
-                tok = lexer::expect_after(it, "expected identifier", tok, token::identifier);
-                name += tok.lexeme();
-            } else if ((tok = lexer::match(it, token::identifier))) {
-                pos = tok.pos();
-                name += tok.lexeme();
-            } else {
-                goto skip;
+                while ((tok = lexer::match_after(it, tok, token::identifier, token::dot)))
+                    name += tok.lexeme();
+                if (!name.empty()) {
+                    node.token = token(token::identifier, name, pos);
+                    return node;
+                }
             }
-            while ((tok = lexer::match_after(it, tok, token::dot))) {
-                name += tok.lexeme();
-                tok = lexer::expect_after(it, "expected identifier", tok, token::identifier);
-                name += tok.lexeme();
-            }
-            node.token = token(token::identifier, name, pos);
-            return node;
-            skip:
         } else {
             if (token tok = lexer::match(it, token::identifier)) {
                 expression node;

@@ -6,10 +6,11 @@
 #include <istream>
 #include <object.hpp>
 #include <sstream>
+#include <string>
 
-#define VERSION 1
+#define OBJ_VER 1
 
-static constexpr uint8_t MAGIC[4] = {'V', 'H', 'X', 'O'};
+static constexpr uint8_t MAGIC[4] = {'O', 'X', 'H', 'V'};
 
 template <std::integral T>
 static T read_little_endian(std::istream& stream) {
@@ -276,7 +277,7 @@ static vhxcc::object read_object_file(std::istream& stream) {
     header.version = read_little_endian<uint16_t>(stream);
     header.arch = read_little_endian<uint32_t>(stream);
 
-    if (header.version != VERSION) {
+    if (header.version != OBJ_VER) {
         throw std::runtime_error("unsupported object file version");
     }
 
@@ -304,11 +305,18 @@ static vhxcc::object read_object_file(std::istream& stream) {
     header.sections_off = read_value(stream);
     header.relocs_off = read_value(stream);
     header.strings_off = read_value(stream);
-    header.entry_off = read_value(stream);
+    std::size_t entry_off = read_value(stream);
     header.symbols_len = read_value(stream);
     header.sections_len = read_value(stream);
     header.relocs_len = read_value(stream);
     header.strings_len = read_value(stream);
+
+    stream.seekg(offset + header.strings_off + entry_off, std::ios::beg);
+    std::string entry_name = "";
+    while (stream.peek() != '\0') {
+        entry_name += static_cast<char>(stream.get());
+    }
+    stream.get(); // consume the null terminator
 
     vhxcc::object obj;
 
@@ -364,7 +372,7 @@ static vhxcc::object read_object_file(std::istream& stream) {
 
     obj.platform(platform_to_string(header.platform));
     obj.arch(arch_to_string(header.arch));
-    obj.entry(header.entry_off);
+    obj.entry(entry_name);
 
     // Map sections by their index
     std::unordered_map<uint32_t, section_header64> section_map;
@@ -556,11 +564,19 @@ static std::ostream& write_object_file(std::ostream& stream, const vhxcc::object
     std::size_t total_size = header_size + section_header_size + symbol_header_size + reloc_header_size + string_block_size + data_block_size;
     std::size_t data_off = header_size + symbol_header_size + section_header_size + reloc_header_size + string_block_size;
 
+    std::string symbol_name = obj.entry();
+    if (string_cache.find(symbol_name) == string_cache.end()) {
+        string_cache.emplace(symbol_name, string_block.str().size());
+        string_block.write(symbol_name.data(), symbol_name.size());
+        string_block.put('\0');
+    }
+    std::size_t entry_off = string_cache.at(symbol_name);
+
     // begin writing the object file to the stream
     stream.write(reinterpret_cast<const char*>(&MAGIC), 4);
     write_little_endian<uint8_t>(stream, is_64 ? MODE_LE64 : MODE_LE32);
     write_little_endian<uint8_t>(stream, string_to_platform(obj.platform()));
-    write_little_endian<uint16_t>(stream, VERSION);
+    write_little_endian<uint16_t>(stream, OBJ_VER);
     write_little_endian<uint32_t>(stream, string_to_arch(obj.arch()));
     write_little_endian<uint32_t>(stream, 0); // reserved
 
@@ -575,7 +591,7 @@ static std::ostream& write_object_file(std::ostream& stream, const vhxcc::object
     // strings_off
     write_value(stream, header_size + symbol_header_size + section_header_size + reloc_header_size);
     // entry_off
-    write_value(stream, obj.entry());
+    write_value(stream, entry_off);
     // symbols_len
     write_value(stream, symbol_header_size);
     // sections_len
@@ -641,7 +657,7 @@ vhxcc::object& vhxcc::object::operator<<(std::istream& stream) {
     return *this << tmp;
 }
 
-std::ostream& operator<<(std::ostream& stream, const vhxcc::object& obj) {
-    write_object_file(stream, obj);
+std::ostream& vhxcc::object::operator>>(std::ostream& stream) {
+    write_object_file(stream, *this);
     return stream;
 }

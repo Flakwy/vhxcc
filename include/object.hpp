@@ -58,7 +58,7 @@ private:
     std::unordered_map<std::string, symbol> _symbols;
     std::string _platform = "none";
     std::string _arch = "vhx32i";
-    std::size_t _entry = 0;
+    std::string _entry = "";
 
 public:
     object() = default;
@@ -69,15 +69,15 @@ public:
     object& read(std::istream&);
 
     object& operator<<(std::istream&);
-    friend std::ostream& operator<<(std::ostream&, const object&);
+    std::ostream& operator>>(std::ostream&);
 
-    const std::string& platform() const { return _platform; }
-    const std::string& arch() const { return _arch; }
-    std::size_t entry() const { return _entry; }
+    std::string platform() const { return _platform; }
+    std::string arch() const { return _arch; }
+    std::string entry() const { return _entry; }
 
-    const std::string& platform(const std::string& platform) { _platform = platform; return _platform; }
-    const std::string& arch(const std::string& arch) { _arch = arch; return _arch; }
-    std::size_t entry(std::size_t entry) { _entry = entry; return _entry; }
+    std::string platform(const std::string& platform) { auto t = _platform; _platform = platform; return t; }
+    std::string arch(const std::string& arch) { auto t = _arch; _arch = arch; return t; }
+    std::string entry(const std::string& entry) { auto t = _entry; _entry = entry; return t; }
 
     vhxcc::section& section(const std::string& name, std::size_t alignment) {
         if (_sections.contains(name)) {
@@ -219,6 +219,8 @@ public:
     }
 
     object& operator<<(const vhxcc::object& object) {
+        if (_entry == "")
+            _entry = object._entry;
         // copy all sectionless symbols
 
         for (const auto& elem : object._symbols) {
