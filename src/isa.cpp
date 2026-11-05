@@ -425,7 +425,136 @@ static encode_result encode_alu_rri(const std::string &mneumonic, const std::vec
     return res;
 }
 
+static encode_result encode_adsi(const std::string &mneumonic, const std::vector<vhxcc::parser::expression> &operands, std::size_t pointer, int relax) {
+    encode_result res;
+    res.mneumonic = mneumonic;
+    res.can_relax = false;
+    res.relax = 0;
+    res.size = 4;
+    static constexpr uint32_t opc6 = 0x0b;
+    operand rd, imm;
+    size_t count = reduce_operands(operands, rd, imm);
+    uint32_t imm16 = 0;
+    uint32_t shimm = 0;
 
+    res.is_valid = false;
+    if (count == 2 && rd.type == operand::_register && imm.type == operand::_constant) {
+        // verify immediate
+        for (size_t i = 0; i < 32; ++i) {
+            uint32_t _imm16 = (imm.constant >> (4 * i)) & 0xffff;
+            if ((static_cast<uint64_t>(_imm16) << (4 * i)) == imm.constant) {
+                imm16 = _imm16;
+                shimm = i;
+                res.is_valid = true;
+                break;
+            }
+        }
+    }
+
+    if (res.is_valid) {
+        res.bytes = pack((
+            (opc6 << 0) |
+            (rd.index << 6) |
+            (shimm << 11) |
+            (imm16 << 16)
+        ), 4);
+    }
+    return res;
+}
+
+static std::vector<char> make_aluop(uint32_t func4, operand rd, operand rm, operand rn_imm12) {
+    uint32_t third = 0;
+    if (rn_imm12.type == operand::_constant) {
+        third = rn_imm12.constant;
+    } else if (rn_imm12.type == operand::_register) {
+        third = rn_imm12.index;
+    }
+    return pack((
+        (0x0 << 0) |
+        (rd.index << 6) |
+        (rm.index << 11) |
+        (func4 << 16) |
+        (third << 20)
+    ), 4);
+}
+
+static std::vector<char> _swp(operand rd, operand rm, operand rn) {
+    return make_aluop(0x00, rd, rm, rn);
+}
+
+static std::vector<char> _add(operand rd, operand rm, operand rn) {
+    return make_aluop(0x01, rd, rm, rn);
+}
+
+static std::vector<char> _mv(operand rd, operand rm) {
+    return make_aluop(0x01, rd, rm, operand("zer"));
+}
+
+static std::vector<char> _addi(operand rd, operand rm, operand imm12) {
+    return make_aluop(0x09, rd, rm, imm12);
+}
+
+static std::vector<char> _adsi(operand rd, operand rm, operand imm, bool* is_valid) {
+    uint32_t imm16 = 0;
+    uint32_t shimm = 0;
+    // verify immediate
+    for (size_t i = 0; i < 32; ++i) {
+        uint32_t _imm16 = (imm.constant >> (4 * i)) & 0xffff;
+        if ((static_cast<uint64_t>(_imm16) << (4 * i)) == imm.constant) {
+            imm16 = _imm16;
+            shimm = i;
+            if (is_valid) {
+                *is_valid = true;
+            }
+            return pack((
+                (0x0b << 0) |
+                (rd.index << 6) |
+                (shimm << 11) |
+                (imm16 << 16)
+            ), 4);
+        }
+    }
+    if (is_valid) {
+        *is_valid = false;
+    }
+    return pack(0, 4);
+}
+
+static encode_result encode_li(const std::string &mneumonic, const std::vector<vhxcc::parser::expression> &operands, std::size_t pointer, int relax) {
+    encode_result res;
+    res.mneumonic = mneumonic;
+    res.can_relax = false;
+    res.relax = 0;
+    res.size = 4;
+    operand rd, val;
+    size_t count = reduce_operands(operands, rd, val);
+
+    res.is_valid = false;
+    if (count == 2 && rd.type == operand::_register && val.type == operand::_constant) {
+        switch (relax) {
+            case 0: { // full output
+                
+            } break;
+            default:
+                break;
+        }
+    }
+
+    return res;
+}
+
+static encode_result encode_br(const std::string &mneumonic, const std::vector<vhxcc::parser::expression> &operands, std::size_t pointer, int relax) {
+    encode_result res;
+    res.mneumonic = mneumonic;
+    res.can_relax = false;
+    res.relax = 0;
+    res.size = 4;
+    static constexpr uint32_t opc6 = 0x00;
+    uint32_t func4 = 0x00;
+    operand rd, rm, imm12;
+    size_t count = reduce_operands(operands, rd, rm, imm12);
+    return res;
+}
 
 
 // ==================================================================================

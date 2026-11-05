@@ -159,6 +159,38 @@ public:
         return _symbols.at(name);
     }
 
+    vhxcc::symbol strip(const std::string& name) {
+        if (_symbols.contains(name)) {
+            vhxcc::symbol symbol = std::move(_symbols.at(name));
+            _symbols.erase(name);
+            if (symbol.section != "") {
+                if (_sections.contains(symbol.section)) {
+                    vhxcc::section& section = _sections.at(symbol.section);
+                    for (auto it = section.relocations.begin(); it != section.relocations.end(); ) {
+                        if (it->symbol == name) {
+                            it = section.relocations.erase(it);
+                            break;
+                        } else {
+                            ++it;
+                        }
+                    }
+                }
+            }
+            return symbol;
+        }
+        throw std::invalid_argument("symbol not found");
+    }
+
+    bool global(const std::string& name) {
+        if (_symbols.contains(name)) {
+            vhxcc::symbol& symbol = _symbols.at(name);
+            bool prev = symbol.is_global;
+            symbol.is_global = true;
+            return prev;
+        }
+        return false;
+    }
+
     const vhxcc::symbol& require(const std::string& name) {
         if (_symbols.contains(name))
             return _symbols.at(name);
