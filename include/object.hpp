@@ -43,8 +43,6 @@ struct relocation {
         : type(t), symbol(s), offset(o), addend(a) {}
 };
 
-using enum relocation::type;
-
 struct section {
     std::size_t virt_addr;
     std::vector<char> data;

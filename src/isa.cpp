@@ -363,14 +363,34 @@ using encoder_fn = std::function<encode_result(const std::string &mneumonic, con
 
 static const std::unordered_map<std::string, encoder_fn> encoder_map = {
     {"swp", encode_alu_rrr},
-    {"add", encode_alu_rrr}
-    // Add more mappings as needed
+    {"add", encode_alu_rrr},
+    {"mv", encode_alu_rrr},
+    {"bl", encode_alu_rrr},
+    {"brlr", encode_alu_rrr},
+    {"nop", encode_alu_rrr},
+    {"sub", encode_alu_rrr},
+    {"or", encode_alu_rrr},
+    {"and", encode_alu_rrr},
+    {"xor", encode_alu_rrr},
+    {"sll", encode_alu_rrr},
+    {"srl", encode_alu_rrr},
+    {"sra", encode_alu_rrr}
 };
 
 static const std::unordered_map<std::string, query_fn> query_map = {
     {"swp", query_alu_rrr},
-    {"add", query_alu_rrr}
-    // Add more mappings as needed
+    {"add", query_alu_rrr},
+    {"mv", query_alu_rrr},
+    {"bl", query_alu_rrr},
+    {"brlr", query_alu_rrr},
+    {"nop", query_alu_rrr},
+    {"sub", query_alu_rrr},
+    {"or", query_alu_rrr},
+    {"and", query_alu_rrr},
+    {"xor", query_alu_rrr},
+    {"sll", query_alu_rrr},
+    {"srl", query_alu_rrr},
+    {"sra", query_alu_rrr}
 };
 
 encode_result vhxcc::query_mneumonic(const std::string& mneumonic) {
