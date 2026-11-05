@@ -528,8 +528,8 @@ public:
 
     class iterator {
         const lexer* _lexer;
-        std::unique_ptr<iterator> _prev;
         std::size_t _index;
+        std::unique_ptr<iterator> _prev;
 
         iterator(const lexer& lexer, std::size_t index = 0) : _lexer(&lexer), _index(index), _prev(nullptr) {}
 

@@ -513,7 +513,7 @@ private:
     }
 
 
-    static expression parse_typename(lexer::iterator& it, const parser::typenames& typenames, bool assembly = false) {
+    static expression parse_typename(lexer::iterator& it, const parser::typenames& typenames, [[maybe_unused]] bool assembly = false) {
         lexer::iterator old = it;
         expression type_val;
         type_val.type = expression::_typename;

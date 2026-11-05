@@ -8,6 +8,7 @@
 namespace vhxcc {
 
     void warn(std::string_view, const vhxcc::token&);
+    void error(std::string_view);
     void error(std::string_view, const vhxcc::token&);
 
     class compile_error : public std::runtime_error {
