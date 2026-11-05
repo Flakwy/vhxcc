@@ -35,7 +35,15 @@ struct relocation {
     std::string symbol;
     std::size_t offset;
     std::size_t addend;
+
+    relocation()
+        : type(vhx_rel32), symbol(""), offset(0), addend(0) {}
+    
+    relocation(enum type t, std::string s, std::size_t o, std::size_t a = 0)
+        : type(t), symbol(s), offset(o), addend(a) {}
 };
+
+using enum relocation::type;
 
 struct section {
     std::size_t virt_addr;

@@ -1359,6 +1359,9 @@ int main(int argc, const char *argv[]) {
                 if (e.type == parser::expression::literal) {
                     // Extract literal value (adjust based on your token/expression value member)
                     int64_t val = 0;
+                    if (e.token.type() == token::float_literal) {
+                        vhxcc::warn("floating-point expressions not implemented, truncated to integer", e.token);
+                    }
                     if (!e.token.lexeme().empty()) {
                         if (e.token.type() == token::char_literal) {
                             val = 0;

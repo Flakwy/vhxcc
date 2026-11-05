@@ -19,7 +19,7 @@ struct encode_result {
     bool        is_valid;  // indicates if the instruction is valid
 };
 
-encode_result query_mneumonic(const std::string& mneumonic, int relax = 0);
-encode_result encode_mneumonic(const std::string& mneumonic, const std::vector<vhxcc::parser::expression>& operands, std::size_t offset, int relax = 0);
+encode_result query_mneumonic(const std::string& mneumonic);
+encode_result encode_mneumonic(const std::string& mneumonic, const std::vector<vhxcc::parser::expression>& operands, std::size_t pointer, int relax = 0);
 
 }
