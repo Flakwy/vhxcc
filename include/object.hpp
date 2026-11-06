@@ -19,17 +19,40 @@ struct symbol {
 
 struct relocation {
     enum type {
+        // all pc-relative relocation words are stored in little-endian
+
+        // pc-relative 12-bit signed offset
+        // synthesis: word(31 downto 20) = (offset - pc)(11 downto 0)
         vhx_pc12,
-        vhx_pca8,
-        vhx_pcs8,
-        vhx_rel32,
-        vhx_rel64,
-        vhx_abs32,
-        vhx_abs64,
-        vhx_abs_lo16,
-        vhx_abs_hi16,
-        vhx_abs_hlo16,
-        vhx_abs_hhi16
+
+        // PC-relative unsigned 8-bit magnitude, covering distances 1 through 256.
+        // The instruction adds one to the encoded value, so the field is (distance - 1).
+        // synthesis:
+        // word(15 downto 11) = encoded(4 downto 0)
+        // word(31 downto 30) = encoded(6 downto 5)
+        // word(19) = encoded(7);
+        // pca8 uses target - pc; pcs8 uses pc - target. Both encode positive magnitudes.
+        vhx_pca8, // PC-relative 8-bit offset
+        vhx_pcs8, // PC-relative 8-bit offset
+
+        // rel32 and rel64 are stored in target endianness, not little-endian
+        // relative to the relocation word, not the program counter
+        vhx_rel32, // Relative 32-bit offset
+        vhx_rel64, // Relative 64-bit offset
+
+        // abs32 and abs64 are stored in target endianness, not little-endian
+        vhx_abs32, // Absolute 32-bit offset
+        vhx_abs64, // Absolute 64-bit offset
+
+        // lo16, hi16, hlo16, hhi16 are stored in little-endian
+        // synthesis: word(31 downto 16) = (offset)(15 downto 0)
+        vhx_abs_lo16, // Absolute low 16-bit offset
+        // synthesis: word(31 downto 16) = (offset)(31 downto 16)
+        vhx_abs_hi16, // Absolute high 16-bit offset
+        // synthesis: word(31 downto 16) = (offset)(47 downto 32)
+        vhx_abs_hlo16, // Absolute higher low 16-bit offset
+        // synthesis: word(31 downto 16) = (offset)(63 downto 48)
+        vhx_abs_hhi16  // Absolute higher high 16-bit offset
     } type;
 
     std::string symbol;
@@ -163,19 +186,6 @@ public:
         if (_symbols.contains(name)) {
             vhxcc::symbol symbol = std::move(_symbols.at(name));
             _symbols.erase(name);
-            if (symbol.section != "") {
-                if (_sections.contains(symbol.section)) {
-                    vhxcc::section& section = _sections.at(symbol.section);
-                    for (auto it = section.relocations.begin(); it != section.relocations.end(); ) {
-                        if (it->symbol == name) {
-                            it = section.relocations.erase(it);
-                            break;
-                        } else {
-                            ++it;
-                        }
-                    }
-                }
-            }
             return symbol;
         }
         throw std::invalid_argument("symbol not found");

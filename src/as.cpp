@@ -15,9 +15,11 @@
 #include <fstream>
 #include <iostream>
 #include <iterator>
+#include <limits>
 #include <memory>
 #include <parser.hpp>
 #include <string>
+#include <type_traits>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -700,7 +702,7 @@ int main(int argc, const char *argv[]) {
                     // Add the directory to the include search list
                     opts.include_dirs.push_back(dir);
                 } else {
-                    std::cerr << BOLD << "vhx-as:" << RED << " error:" << RESET << " missing path after '-I'" << std::endl;
+                    vhxcc::error("missing path after '-I'");
                 }
             } else {
                 std::string dir = arg.substr(2);
@@ -715,7 +717,7 @@ int main(int argc, const char *argv[]) {
                     // Set the output file
                     opts.output = output;
                 } else {
-                    std::cerr << BOLD << "vhx-as:" << RED << " error:" << RESET << " missing filename after '-o'" << std::endl;
+                    vhxcc::error("missing filename after '-o'");
                 }
             } else {
                 std::string output = arg.substr(2);
@@ -727,9 +729,9 @@ int main(int argc, const char *argv[]) {
             std::string abi = arg.substr(5);
             // Store the ABI option in the opts structure
             opts.arch = abi;
-        } else if (arg.substr(0, 6) == "-march=") {
+        } else if (arg.substr(0, 7) == "-march=") {
             // Handle architecture option
-            std::string arch = arg.substr(6);
+            std::string arch = arg.substr(7);
             // Store the architecture option in the opts structure
             opts.arch = arch;
         } else if (arg.substr(0, 2) == "-e") {
@@ -740,7 +742,7 @@ int main(int argc, const char *argv[]) {
                     // Set the entry point
                     opts.entry = entry;
                 } else {
-                    std::cerr << BOLD << "vhx-as:" << RED << " error:" << RESET << " missing entry point after '-e'" << std::endl;
+                    vhxcc::error("missing entry point after '-e'");
                 }
             } else {
                 std::string entry = arg.substr(2);
@@ -762,7 +764,7 @@ int main(int argc, const char *argv[]) {
         } else if (arg == "--warn") {
             opts.no_warn = false;
         } else if (arg[0] == '-') {
-            std::cerr << BOLD << "vhx-as:" << RED << " error:" << RESET << " unknown option '" << arg << "'" << std::endl;
+            vhxcc::error("unknown option '" + arg + "'");
         } else {
             // Handle input file
             if (first_file.empty()) {
@@ -773,7 +775,7 @@ int main(int argc, const char *argv[]) {
     }
 
     if (opts.inputs.empty()) {
-        std::cerr << BOLD << "vhx-as:" << RED << " fatal error:" << RESET << " no input files" << std::endl;
+        vhxcc::error("no input files");
         return 1;
     }
 
@@ -861,6 +863,7 @@ int main(int argc, const char *argv[]) {
     directives[".err"] = no_argument;
     directives[".text"] = no_argument;
     directives[".data"] = no_argument;
+    directives[".rodata"] = no_argument;
     directives[".bss"] = no_argument;
 
     auto one_string_argument = [](const vhxcc::token& name, vhxcc::lexer::iterator& it) -> ast {
@@ -1276,7 +1279,7 @@ int main(int argc, const char *argv[]) {
                         section = section_name;
                     }
                 } else if (ast.type == ast::directive &&
-                           (ast.name == ".text" || ast.name == ".data" || ast.name == ".bss")) {
+                           (ast.name == ".text" || ast.name == ".data" || ast.name == ".bss" || ast.name == ".rodata")) {
                     section = ast.name;
                 } else if (ast.type == ast::directive && (ast.name == ".set" || ast.name == ".equ" || ast.name == ".equiv")) {
                     std::string symbol_name = ast.children.front().expr.token.lexeme();
@@ -1339,6 +1342,39 @@ int main(int argc, const char *argv[]) {
 
         std::unordered_map<std::string, section_final> sections_final;
         std::unordered_map<std::string, label_info> labels_info;
+        std::unordered_map<const binary_node*, std::size_t> layout_sizes;
+
+        auto local_label_offset = [&](const std::string& section_name,
+                                      const std::string& symbol_name,
+                                      const binary_node* relaxed_node,
+                                      std::size_t relaxed_size,
+                                      std::size_t& offset) {
+            auto section = sections_final.find(section_name);
+            if (section == sections_final.end())
+                return false;
+
+            std::size_t pointer = 0;
+            for (const binary_node& node : section->second.nodes) {
+                if (node.type == binary_node::label) {
+                    if (node.name == symbol_name) {
+                        offset = pointer;
+                        return true;
+                    }
+                } else if (node.type == binary_node::org) {
+                    pointer = std::max(pointer, node.size);
+                } else if (node.type == binary_node::align) {
+                    const std::size_t remainder = pointer % node.size;
+                    if (remainder != 0)
+                        pointer += node.size - remainder;
+                } else {
+                    auto size = layout_sizes.find(&node);
+                    if (size == layout_sizes.end())
+                        return false;
+                    pointer += &node == relaxed_node ? relaxed_size : size->second;
+                }
+            }
+            return false;
+        };
 
         auto fold_and_validate = [&](this auto& self, const parser::expression& expr, std::vector<label_info> cur_labels = {}) -> parser::expression {
             // 1. Helper to represent a flattened linear expression: constant + sum(coeff * symbol)
@@ -1654,6 +1690,131 @@ int main(int argc, const char *argv[]) {
                 }
             }
             return bytes;
+        };
+
+        auto resolve_local_relocations = [&](encode_result& encoding,
+                                             const std::string& section_name,
+                                             std::size_t section_offset,
+                                             const vhxcc::position& source_pos,
+                                             bool require_local_pc_relocations,
+                                             const binary_node* relaxed_node,
+                                             std::size_t relaxed_size) {
+            std::vector<relocation> unresolved;
+            for (const relocation& reloc : encoding.relocations) {
+                const bool pc_relative =
+                    reloc.type == relocation::vhx_pc12 ||
+                    reloc.type == relocation::vhx_pca8 ||
+                    reloc.type == relocation::vhx_pcs8;
+                auto symbol = labels_info.find(reloc.symbol);
+                if (symbol == labels_info.end() ||
+                    symbol->second.section != section_name) {
+                    if (pc_relative && require_local_pc_relocations)
+                        return false;
+                    unresolved.push_back(reloc);
+                    continue;
+                }
+
+                const std::size_t width =
+                    reloc.type == relocation::vhx_rel32 ? 4 :
+                    reloc.type == relocation::vhx_rel64 ? 8 : 4;
+                if (reloc.offset > encoding.bytes.size() ||
+                    width > encoding.bytes.size() - reloc.offset) {
+                    throw vhxcc::compile_error(
+                        "relocation field exceeds encoded data",
+                        token(token::identifier, reloc.symbol, source_pos));
+                }
+
+                if (pc_relative || reloc.type == relocation::vhx_rel32 ||
+                    reloc.type == relocation::vhx_rel64) {
+                    constexpr int64_t min_value =
+                        std::numeric_limits<int64_t>::min();
+                    constexpr int64_t max_value =
+                        std::numeric_limits<int64_t>::max();
+                    if (static_cast<uintmax_t>(symbol->second.offset) >
+                            static_cast<uintmax_t>(max_value) ||
+                        reloc.offset >
+                            std::numeric_limits<std::size_t>::max() -
+                                section_offset) {
+                        return false;
+                    }
+
+                    const std::size_t place_offset = section_offset + reloc.offset;
+                    if (static_cast<uintmax_t>(place_offset) >
+                        static_cast<uintmax_t>(max_value))
+                        return false;
+                    std::size_t target_offset = symbol->second.offset;
+                    if (relaxed_node != nullptr)
+                        local_label_offset(section_name, reloc.symbol,
+                                           relaxed_node, relaxed_size,
+                                           target_offset);
+                    if (static_cast<uintmax_t>(target_offset) >
+                        static_cast<uintmax_t>(max_value))
+                        return false;
+                    const int64_t target = static_cast<int64_t>(target_offset);
+                    const int64_t place = static_cast<int64_t>(place_offset);
+                    const int64_t addend = static_cast<int64_t>(
+                        std::bit_cast<std::make_signed_t<std::size_t>>(reloc.addend));
+                    if ((addend > 0 && target > max_value - addend) ||
+                        (addend < 0 && target < min_value - addend))
+                        return false;
+                    const int64_t target_with_addend = target + addend;
+                    if ((place > 0 && target_with_addend < min_value + place) ||
+                        (place < 0 && target_with_addend > max_value + place))
+                        return false;
+                    const int64_t value = target_with_addend - place;
+
+                    if (reloc.type == relocation::vhx_pc12) {
+                        if (value < -2048 || value > 2047)
+                            return false;
+                        uint32_t word = 0;
+                        for (std::size_t i = 0; i < 4; ++i)
+                            word |= static_cast<uint32_t>(
+                                static_cast<uint8_t>(encoding.bytes[reloc.offset + i]))
+                                << (i * 8);
+                        word = (word & 0x000fffffU) |
+                               ((static_cast<uint32_t>(value) & 0xfffU) << 20);
+                        for (std::size_t i = 0; i < 4; ++i)
+                            encoding.bytes[reloc.offset + i] =
+                                static_cast<char>((word >> (i * 8)) & 0xffU);
+                    } else if (reloc.type == relocation::vhx_pca8 ||
+                               reloc.type == relocation::vhx_pcs8) {
+                        const bool adding = reloc.type == relocation::vhx_pca8;
+                        if ((adding && (value < 1 || value > 256)) ||
+                            (!adding && (value > -1 || value < -256)))
+                            return false;
+                        const uint32_t magnitude =
+                            static_cast<uint32_t>(adding ? value : -value);
+                        const uint32_t bits = magnitude - 1;
+                        uint32_t word = 0;
+                        for (std::size_t i = 0; i < 4; ++i)
+                            word |= static_cast<uint32_t>(
+                                static_cast<uint8_t>(encoding.bytes[reloc.offset + i]))
+                                << (i * 8);
+                        word = (word & ~((0x1fU << 11) | (0x3U << 30) |
+                                         (1U << 19))) |
+                               ((bits & 0x1fU) << 11) |
+                               (((bits >> 5) & 0x3U) << 30) |
+                               (((bits >> 7) & 0x1U) << 19);
+                        for (std::size_t i = 0; i < 4; ++i)
+                            encoding.bytes[reloc.offset + i] =
+                                static_cast<char>((word >> (i * 8)) & 0xffU);
+                    } else {
+                        if (reloc.type == relocation::vhx_rel32 &&
+                            (value < std::numeric_limits<int32_t>::min() ||
+                             value > std::numeric_limits<int32_t>::max()))
+                            return false;
+                        const std::vector<char> bytes =
+                            itob(static_cast<uint64_t>(value), width);
+                        std::copy(bytes.begin(), bytes.end(),
+                                  encoding.bytes.begin() + reloc.offset);
+                    }
+                    continue;
+                }
+
+                unresolved.push_back(reloc);
+            }
+            encoding.relocations = std::move(unresolved);
+            return true;
         };
 
         auto require_absolute_integer = [&](const parser::expression& expr, std::string_view description) -> int64_t {
@@ -2095,6 +2256,13 @@ int main(int argc, const char *argv[]) {
                 break;
             }
 
+            layout_sizes.clear();
+            for (const auto& [section_name, info] : sections_final) {
+                (void)section_name;
+                for (const binary_node& bin : info.nodes)
+                    layout_sizes.emplace(&bin, bin.size);
+            }
+
             // 2. Relax pass: Re-evaluate instruction sizes now that label addresses are known
             for (auto& [name, info] : sections_final) {
                 std::size_t pointer = 0;
@@ -2102,20 +2270,36 @@ int main(int argc, const char *argv[]) {
                     labels_info["."] = {name, pointer};
                     labels_info["$"] = {name, pointer};
                     if (bin.type == binary_node::opcode) {
-                        const int requested_relaxation = bin.encoding.relax + (bin.encoding.can_relax ? 1 : 0);
-                        std::vector<parser::expression> operands;
-                        for (const auto& expr : bin.operands)
-                            operands.push_back(fold_and_validate(expr));
-                        encode_result res = encode_mneumonic(bin.name, operands, pointer, requested_relaxation);
-                        if (res.is_valid) {
-                            const int previous_relaxation = bin.encoding.relax;
-                            const std::size_t new_size = res.size ? res.size : res.bytes.size();
-                            if (new_size != bin.size || res.relax > previous_relaxation)
-                                changed = true;
-                            bin.size = new_size;
-                            res.size = new_size;
-                            bin.encoding = res;
-                        } // If the next relaxation is invalid, keep the last valid encoding.
+                        const std::size_t instruction_offset = pointer;
+                        const std::size_t previous_size = bin.size;
+                        if (bin.encoding.can_relax) {
+                            std::vector<parser::expression> operands;
+                            for (const auto& expr : bin.operands)
+                                operands.push_back(fold_and_validate(expr));
+                            const int requested_relaxation = bin.encoding.relax + 1;
+                            encode_result res = encode_mneumonic(
+                                bin.name, operands, instruction_offset,
+                                requested_relaxation);
+                            if (!res.is_valid ||
+                                (res.size != 0 && res.size != res.bytes.size())) {
+                                bin.encoding.can_relax = false;
+                            } else {
+                                res.size = res.size ? res.size : res.bytes.size();
+                                encode_result candidate = res;
+                                if (resolve_local_relocations(
+                                        candidate, name, instruction_offset,
+                                        bin.source_pos, true, &bin,
+                                        candidate.size)) {
+                                    if (candidate.size != previous_size ||
+                                        candidate.relax != bin.encoding.relax)
+                                        changed = true;
+                                    bin.size = candidate.size;
+                                    bin.encoding = std::move(candidate);
+                                }
+                            }
+                        }
+                        pointer += previous_size;
+                        continue;
                     }
 
                     // Keep pointer tracking in sync during the relaxation pass for PC-relative checks
@@ -2254,8 +2438,16 @@ int main(int argc, const char *argv[]) {
                     bin.encoding = std::move(encoding);
                     bin.size = encoded_size;
                     bin.encoding.size = bin.size;
+                    if (!resolve_local_relocations(bin.encoding, name, pointer,
+                                                   bin.source_pos, false, nullptr, 0)) {
+                        throw vhxcc::compile_error(
+                            "PC-relative relocation is out of range",
+                            token(token::identifier, bin.name, bin.source_pos));
+                    }
                     for (auto& reloc : bin.encoding.relocations) {
                         obj.relocation(name, reloc.symbol, reloc.type, pointer + reloc.offset, reloc.addend);
+                        if (!labels_info.contains(reloc.symbol))
+                            obj.require(reloc.symbol);
                     }
                     pointer += bin.size;
                     obj.append(name, bin.encoding.bytes);
@@ -2322,8 +2514,16 @@ int main(int argc, const char *argv[]) {
                     }
                     bin.size = bin.encoding.bytes.size();
                     bin.encoding.size = bin.size;
+                    if (!resolve_local_relocations(bin.encoding, name, pointer,
+                                                   bin.source_pos, false, nullptr, 0)) {
+                        throw vhxcc::compile_error(
+                            "PC-relative relocation is out of range",
+                            token(token::identifier, bin.name, bin.source_pos));
+                    }
                     for (auto& reloc : bin.encoding.relocations) {
                         obj.relocation(name, reloc.symbol, reloc.type, pointer + reloc.offset, reloc.addend);
+                        if (!labels_info.contains(reloc.symbol))
+                            obj.require(reloc.symbol);
                     }
                     pointer += bin.size;
                     obj.append(name, bin.encoding.bytes);
@@ -2333,9 +2533,17 @@ int main(int argc, const char *argv[]) {
             info.pointer = pointer;
 
             std::unordered_map<std::string, vhxcc::symbol> _symcpy = obj.symbols();
+            std::unordered_set<std::string> relocated_symbols;
+            for (const auto& [section_name, object_section] : obj.sections()) {
+                (void)section_name;
+                for (const relocation& reloc : object_section.relocations)
+                    relocated_symbols.insert(reloc.symbol);
+            }
             for (const auto& [symbol, info] : _symcpy) {
                 if (globals.contains(symbol)) {
                     obj.global(symbol);
+                } else if (relocated_symbols.contains(symbol)) {
+                    continue;
                 } else {
                     obj.strip(symbol);
                 }

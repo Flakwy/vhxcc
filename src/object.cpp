@@ -219,6 +219,10 @@ struct reloc_header32 {
 #define REL_R_VHX_REL64 4
 #define REL_R_VHX_ABS32 5
 #define REL_R_VHX_ABS64 6
+#define REL_R_VHX_ABS_LO16 7
+#define REL_R_VHX_ABS_HI16 8
+#define REL_R_VHX_ABS_HLO16 9
+#define REL_R_VHX_ABS_HHI16 10
 
 static enum vhxcc::relocation::type to_reloc_type(uint32_t type) {
     switch (type) {
@@ -229,6 +233,10 @@ static enum vhxcc::relocation::type to_reloc_type(uint32_t type) {
         case REL_R_VHX_REL64: return vhxcc::relocation::type::vhx_rel64;
         case REL_R_VHX_ABS32: return vhxcc::relocation::type::vhx_abs32;
         case REL_R_VHX_ABS64: return vhxcc::relocation::type::vhx_abs64;
+        case REL_R_VHX_ABS_LO16: return vhxcc::relocation::type::vhx_abs_lo16;
+        case REL_R_VHX_ABS_HI16: return vhxcc::relocation::type::vhx_abs_hi16;
+        case REL_R_VHX_ABS_HLO16: return vhxcc::relocation::type::vhx_abs_hlo16;
+        case REL_R_VHX_ABS_HHI16: return vhxcc::relocation::type::vhx_abs_hhi16;
         default: throw std::runtime_error("unknown relocation type");
     }
 }
@@ -242,6 +250,10 @@ static uint32_t reloc_type_to_uint32(enum vhxcc::relocation::type type) {
         case vhxcc::relocation::type::vhx_rel64: return REL_R_VHX_REL64;
         case vhxcc::relocation::type::vhx_abs32: return REL_R_VHX_ABS32;
         case vhxcc::relocation::type::vhx_abs64: return REL_R_VHX_ABS64;
+        case vhxcc::relocation::type::vhx_abs_lo16: return REL_R_VHX_ABS_LO16;
+        case vhxcc::relocation::type::vhx_abs_hi16: return REL_R_VHX_ABS_HI16;
+        case vhxcc::relocation::type::vhx_abs_hlo16: return REL_R_VHX_ABS_HLO16;
+        case vhxcc::relocation::type::vhx_abs_hhi16: return REL_R_VHX_ABS_HHI16;
         default: throw std::runtime_error("unknown relocation type");
     }
 }
@@ -558,11 +570,6 @@ static std::ostream& write_object_file(std::ostream& stream, const vhxcc::object
     std::size_t section_header_size = section_headers.size() * (is_64 ? sizeof(section_header64) : sizeof(section_header32));
     std::size_t symbol_header_size = symbol_headers.size() * (is_64 ? sizeof(symbol_header64) : sizeof(symbol_header32));
     std::size_t reloc_header_size = reloc_headers.size() * (is_64 ? sizeof(reloc_header64) : sizeof(reloc_header32));
-    std::size_t string_block_size = (string_block.str().size() + 3) & ~3;
-    std::size_t data_block_size = data_block.str().size();
-
-    std::size_t total_size = header_size + section_header_size + symbol_header_size + reloc_header_size + string_block_size + data_block_size;
-    std::size_t data_off = header_size + symbol_header_size + section_header_size + reloc_header_size + string_block_size;
 
     std::string symbol_name = obj.entry();
     if (string_cache.find(symbol_name) == string_cache.end()) {
@@ -571,6 +578,12 @@ static std::ostream& write_object_file(std::ostream& stream, const vhxcc::object
         string_block.put('\0');
     }
     std::size_t entry_off = string_cache.at(symbol_name);
+
+    std::size_t string_block_size = (string_block.str().size() + 3) & ~3;
+    std::size_t data_block_size = data_block.str().size();
+
+    std::size_t total_size = header_size + section_header_size + symbol_header_size + reloc_header_size + string_block_size + data_block_size;
+    std::size_t data_off = header_size + symbol_header_size + section_header_size + reloc_header_size + string_block_size;
 
     // begin writing the object file to the stream
     stream.write(reinterpret_cast<const char*>(&MAGIC), 4);

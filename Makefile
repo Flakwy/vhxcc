@@ -21,7 +21,7 @@ CCFLAGS  := $(CFLAGS) -std=c26
 CXXFLAGS := $(CFLAGS) -std=c++26
 
 SRCS_C   := $(wildcard $(SDIR)/*.c)
-SRCS_CXX := $(wildcard $(SDIR)/*.cpp)
+SRCS_CXX := $(filter-out $(SDIR)/cc_tmp.cpp,$(wildcard $(SDIR)/*.cpp))
 
 OBJS_C   := $(patsubst $(SDIR)/%.c,$(BDIR)/%.o,$(SRCS_C))
 OBJS_CXX := $(patsubst $(SDIR)/%.cpp,$(BDIR)/%.o,$(SRCS_CXX))
@@ -36,7 +36,7 @@ AS_OBJS	 := $(filter-out $(BDIR)/cc.o $(BDIR)/ld.o, $(OBJS))
 CC_OBJS	 := $(filter-out $(BDIR)/as.o $(BDIR)/ld.o, $(OBJS))
 LD_OBJS	 := $(filter-out $(BDIR)/as.o $(BDIR)/cc.o, $(OBJS))
 
-.PHONY: all
+.PHONY: all test
 all: release
 
 pull:
@@ -60,6 +60,9 @@ release: $(TARGET_CC) $(TARGET_AS) $(TARGET_LD)
 
 debug: $(TARGET_CC) $(TARGET_AS) $(TARGET_LD)
 	@echo "Debug build complete"
+
+test: debug
+	python3 -B -m unittest discover -s tests -p "test_*.py"
 
 $(BDIR)/%.o: $(SDIR)/%.cpp | $(BDIR)
 	$(CXX) $(CXXFLAGS) -c $< -o $@

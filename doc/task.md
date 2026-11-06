@@ -1,0 +1,87 @@
+# Assembler Tasks
+- [x] CLI Argument Parsing
+- [x] Tokenizer
+- [x] Parser
+- [x] Absolute Expressions
+- [x] Early Label Resolving
+- [x] Stripping Unused Locals
+- [x] Object File Output
+  #### Encoder
+- [x] `mv` pseudo-op
+- [x] `li` psuedo-op
+    - [x] `adsi` implementaion
+    - [x] `addi` implementation
+- [ ] `la` pseudo-op
+    - [ ] `R_VHX_ABS32` implementation
+    - [ ] `R_VHX_ABS64` implementation
+    - [ ] `R_VHX_PC_REL12` implementation
+    - [ ] `R_VHX_GP_REL12` implementation
+    - [ ] `R_VHX_REL32` implementation
+    - [ ] `R_VHX_REL64` implementation
+- [ ] `br` pseudo-op
+    - [ ] `R_VHX_ABS32` implementation
+    - [ ] `R_VHX_ABS64` implementation
+    - [ ] `R_VHX_PC_REL12` implementation
+- [ ] `br<cc>` pseudo-ops
+    - [ ] `R_VHX_ABS32` implementation
+    - [ ] `R_VHX_ABS64` implementation
+    - [ ] `R_VHX_PC_REL12` implementation
+- [x] `brlr` pseudo-op
+- [x] `bl` pseudo-op
+- [ ] `brl` pseudo-op
+    - [ ] `R_VHX_ABS32` implementation
+    - [ ] `R_VHX_ABS64` implementation
+    - [ ] `R_VHX_PC_REL12` implementation
+ ---
+
+# VXO Format
+- [x] Reading Object Files
+- [x] Writing Object Files
+- [x] Independent Sections
+- [ ] Dynamic Symbols
+- [x] Global Symbols
+- [x] Relocations
+- [ ] Shared Libraries
+---
+
+# ISA
+- [x] Register-Register ALU Instructions (`vhxi`)
+- [x] Register-Immediate ALU Instructions (`vhxi`)
+- [x] Zero Extension Instructions (`vhxi`)
+- [x] Sign Extension Instructions (`vhxi`)
+- [x] Conditional Move Instructions (`vhxi`)
+- [x] Conditional Immediate Instructions (`vhxi`)
+- [x] Memory Instructions (`vhxi`)
+- [x] Machine Register Instructions (`vhx_zicsr`)
+- [x] Exception Instructions (`vhx_zicsr`)
+- [x] Add Shifted Immediate Instruction (`vhxi`)
+- [x] Multiplication Instructions (`vhxm`)
+- [ ] Floating-Point ALU Instructions (`vhxm`)
+    - [ ] Ratified
+    - [ ] Encodings
+- [x] Load-Reserve, Store-Conditional (`vhxp`)
+    - [ ] Ratified
+    - [x] Encodings
+- [x] Atomic Memory Operations (`vhxa`)
+    - [ ] Ratified
+    - [ ] Encodings
+- [ ] Supervisory Extension (`vhxs`)
+    - [x] Privilage Levels
+    - [ ] Virtual Memory Translation
+    - [ ] Memory Paging
+---
+
+# Compiler Tasks
+- [ ] CLI Argument Parsing
+- [ ] Tokenizer
+- [ ] Parser
+- [ ] Typenames
+- [x] Expression Parsing
+- [ ] Statement Parsing
+- [ ] Functions
+- [ ] `if-else` statements
+- [ ] `do-while` statements
+- [ ] `while` statements
+- [ ] `for` statements
+- [ ] Assembly Output
+---

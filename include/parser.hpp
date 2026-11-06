@@ -463,7 +463,7 @@ private:
             token tok;
             std::string name = "";
             expression node;
-            vhxcc::position pos;
+            vhxcc::position pos = it->pos();
             node.type = expression::identifier;
             tok = lexer::match(it, token::identifier, token::dot);
             if (tok) {
