@@ -14,6 +14,7 @@
 #include <utility>
 #include <vector>
 
+#include <isa.hpp>
 #include <object.hpp>
 
 static const std::string help = R"(Usage: vhx64-none-vxo-ld [options] file...
@@ -26,8 +27,8 @@ Options:
                               Enable warnings when --enable-non-contiguous-regions may cause unexpected behaviour
   --disable-linker-version    Ignored
   --enable-linker-version     Ignored
-  -EB                         Link big-endian objects
-  -EL                         Link little-endian objects
+  -EB                         Store data relocations in big-endian order
+  -EL                         Store data relocations in little-endian order
   -f SHLIB, --auxiliary SHLIB Ignored 
   -F SHLIB, --filter SHLIB    Ignored
   -g                          Ignored
@@ -112,7 +113,8 @@ Options:
   --noinhibit-exec            Create an object file even if errors occur
   -nostdlib                   Only use library directories specified on
                                 the command line
-  --oformat TARGET            Specify target of output file
+  --oformat TARGET            Output vxo32/64 little/big endian or binary
+                                (binary starts with a trampoline to the entry symbol)
   --print-output-format       Print default output format
   --reduce-memory-overheads   Reduce memory overheads, possibly taking much longer
   --max-cache-size=SIZE       Ignored
@@ -212,12 +214,73 @@ struct link_options {
     std::string unresolved_method = "report-all";
     uint64_t image_base = 0;
     bool image_base_set = false;
-    bool endian_set = false;
     bool big_endian = false;
     bool help = false;
     bool version = false;
     bool print_output_format = false;
 };
+
+struct output_format {
+    bool binary;
+    bool is_64;
+    bool big_endian;
+};
+
+static output_format parse_output_format(const std::string& value) {
+    if (value == "binary")
+        return {true, false, false};
+    if (value == "vxo32-littlevhx" || value == "vxo32-little")
+        return {false, false, false};
+    if (value == "vxo64-littlevhx" || value == "vxo64-little")
+        return {false, true, false};
+    if (value == "vxo32-bigvhx" || value == "vxo32-big")
+        return {false, false, true};
+    if (value == "vxo64-bigvhx" || value == "vxo64-big")
+        return {false, true, true};
+    throw std::runtime_error("unsupported output format: " + value);
+}
+
+static constexpr const char* default_output_format = "vxo64-littlevhx";
+
+static vhxcc::parser::expression identifier_expression(const std::string& name) {
+    vhxcc::parser::expression expression;
+    expression.type = vhxcc::parser::expression::identifier;
+    expression.token = vhxcc::token(vhxcc::token::identifier, name);
+    return expression;
+}
+
+static void prepend_binary_entry_stub(vhxcc::object& output, const std::string& arch) {
+    const std::string entry = output.entry();
+    if (entry.empty())
+        throw std::runtime_error("binary output requires an entry symbol (use -e)");
+
+    const bool is_32 = arch.rfind("vhx32", 0) == 0;
+    if (!is_32 && arch.rfind("vhx64", 0) != 0)
+        throw std::runtime_error("binary output is only supported for VHX32 and VHX64");
+
+    const std::string load_mnemonic = is_32 ? "la32" : "la";
+    const vhxcc::parser::expression lp = identifier_expression("lp");
+    const vhxcc::parser::expression target = identifier_expression(entry);
+    const vhxcc::encode_result load =
+        vhxcc::encode_mneumonic(load_mnemonic, {lp, target}, 0);
+    if (!load.is_valid)
+        throw std::runtime_error("failed to encode binary entry trampoline");
+
+    vhxcc::section& text = output.section(".text", 4);
+    const std::size_t load_offset = text.data.size();
+    text.data.insert(text.data.end(), load.bytes.begin(), load.bytes.end());
+    for (const vhxcc::relocation& relocation : load.relocations) {
+        text.relocations.emplace_back(relocation.type, relocation.symbol,
+                                      load_offset + relocation.offset,
+                                      relocation.addend);
+    }
+
+    const vhxcc::encode_result jump =
+        vhxcc::encode_mneumonic("bl", {lp}, 0);
+    if (!jump.is_valid)
+        throw std::runtime_error("failed to encode binary entry trampoline");
+    text.data.insert(text.data.end(), jump.bytes.begin(), jump.bytes.end());
+}
 
 static void record_flag(link_options& options, const std::string& name) {
     options.flags[name] = true;
@@ -380,10 +443,7 @@ static void parse_arguments(int argc, const char* argv[], link_options& options)
         } else if (name == "--oformat") {
             options.output_format = require_value(args, i, name, inline_value);
             record_value(options, name, options.output_format);
-            if (!options.endian_set)
-                options.big_endian = options.output_format.find("big") != std::string::npos;
         } else if (name == "-EB" || name == "-EL") {
-            options.endian_set = true;
             options.big_endian = name == "-EB";
             record_flag(options, name);
         } else if (name == "--image-base") {
@@ -484,10 +544,6 @@ static void parse_arguments(int argc, const char* argv[], link_options& options)
             if (name == "-r" || name == "-i" || name == "--relocatable")
                 options.flags["--relocatable"] = true;
         }
-
-        if (!options.endian_set && options.output_format.empty() && !options.target.empty() &&
-            (options.target.find("big") != std::string::npos))
-            options.big_endian = true;
     }
 }
 
@@ -662,9 +718,55 @@ static void apply_relocation(vhxcc::section& section, const vhxcc::relocation& r
     }
 }
 
+static void write_binary(std::ostream& stream, const vhxcc::object& output) {
+    std::vector<std::pair<std::string, const vhxcc::section*>> sections;
+    for (const auto& [name, section] : output.sections()) {
+        if (!section.data.empty())
+            sections.emplace_back(name, &section);
+    }
+    if (sections.empty())
+        throw std::runtime_error("cannot write an empty binary image");
+
+    std::sort(sections.begin(), sections.end(), [](const auto& left, const auto& right) {
+        if (left.second->virt_addr != right.second->virt_addr)
+            return left.second->virt_addr < right.second->virt_addr;
+        return left.first < right.first;
+    });
+    const uint64_t image_start = sections.front().second->virt_addr;
+    const auto text = output.sections().find(".text");
+    if (text == output.sections().end() || text->second.data.empty() ||
+        text->second.virt_addr != image_start)
+        throw std::runtime_error("binary entry trampoline must be at the beginning of the image");
+
+    constexpr std::size_t zero_chunk_size = 4096;
+    const std::vector<char> zeros(zero_chunk_size, 0);
+    uint64_t cursor = image_start;
+    for (const auto& [name, section] : sections) {
+        if (section->virt_addr < cursor)
+            throw std::runtime_error("binary sections overlap at " + name);
+        uint64_t gap = section->virt_addr - cursor;
+        while (gap != 0) {
+            const std::size_t count = static_cast<std::size_t>(
+                std::min<uint64_t>(gap, zero_chunk_size));
+            stream.write(zeros.data(), static_cast<std::streamsize>(count));
+            gap -= count;
+        }
+        stream.write(section->data.data(),
+                     static_cast<std::streamsize>(section->data.size()));
+        cursor = checked_add(section->virt_addr, section->data.size(),
+                             "binary section " + name);
+    }
+}
+
 static int link(const link_options& options) {
     if (options.inputs.empty())
         throw std::runtime_error("no input files");
+
+    const output_format format = parse_output_format(
+        options.output_format.empty() ? default_output_format : options.output_format);
+    if (format.binary &&
+        (has_flag(options, "--relocatable") || has_flag(options, "--emit-relocs")))
+        throw std::runtime_error("binary output cannot be relocatable or contain relocations");
 
     std::vector<vhxcc::object> inputs;
     inputs.reserve(options.inputs.size());
@@ -750,6 +852,9 @@ static int link(const link_options& options) {
             }
         }
     }
+
+    if (format.binary)
+        prepend_binary_entry_stub(output, arch);
 
     std::vector<std::unordered_map<std::string, std::size_t>> section_offsets(inputs.size());
     for (std::size_t i = 0; i < inputs.size(); ++i) {
@@ -874,6 +979,8 @@ static int link(const link_options& options) {
                         has_flag(options, "--no-undefinef") ||
                         has_flag(options, "--error-unresolved-symbols");
                     const bool warn = has_flag(options, "--warn-unresolved-symbols");
+                    if (format.binary && reloc.symbol == output.entry())
+                        throw std::runtime_error("binary entry symbol is undefined: " + reloc.symbol);
                     if (!ignore && (must_error || !warn))
                         throw std::runtime_error("undefined symbol: " + reloc.symbol);
                     if (!ignore && warn)
@@ -889,6 +996,11 @@ static int link(const link_options& options) {
                         throw std::runtime_error("symbol " + reloc.symbol + " refers to missing section " + symbol.section);
                     value = checked_add(target_section->second.virt_addr, value, "symbol address");
                 }
+                if (format.binary && arch.rfind("vhx32", 0) == 0 &&
+                    reloc.symbol == output.entry() &&
+                    checked_add(value, static_cast<uint64_t>(reloc.addend),
+                                "binary entry address") > std::numeric_limits<uint32_t>::max())
+                    throw std::runtime_error("VHX32 binary entry address exceeds 32 bits");
                 apply_relocation(section, reloc, value, options.big_endian);
                 if (has_flag(options, "--emit-relocs"))
                     remaining.push_back(reloc);
@@ -900,7 +1012,15 @@ static int link(const link_options& options) {
     std::ofstream stream(options.output, std::ios::binary);
     if (!stream)
         throw std::runtime_error("cannot open output file: " + options.output);
-    output.write(stream);
+    if (format.binary) {
+        for (const auto& [name, section] : output.sections()) {
+            if (!section.relocations.empty())
+                throw std::runtime_error("binary output contains unresolved relocations in section " + name);
+        }
+        write_binary(stream, output);
+    } else {
+        output.write(stream, format.is_64, format.big_endian);
+    }
     if (!stream)
         throw std::runtime_error("failed writing output file: " + options.output);
     return 0;
@@ -921,7 +1041,8 @@ int main(int argc, const char *argv[]) {
             return 0;
         }
         if (options.print_output_format) {
-            std::cout << (options.output_format.empty() ? "vxo" : options.output_format) << '\n';
+            std::cout << (options.output_format.empty()
+                ? default_output_format : options.output_format) << '\n';
             return 0;
         }
         return link(options);

@@ -89,6 +89,7 @@ public:
     object(std::istream&);
     
     object& write(std::ostream&);
+    object& write(std::ostream&, bool is_64, bool big_endian);
     object& read(std::istream&);
 
     object& operator<<(std::istream&);

@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <iostream>
 #include <istream>
+#include <limits>
 #include <object.hpp>
 #include <sstream>
 #include <string>
@@ -286,16 +287,19 @@ static vhxcc::object read_object_file(std::istream& stream) {
     header.magic = magic;
     header.mode = read_little_endian<uint8_t>(stream);
     header.platform = read_little_endian<uint8_t>(stream);
-    header.version = read_little_endian<uint16_t>(stream);
-    header.arch = read_little_endian<uint32_t>(stream);
-
-    if (header.version != OBJ_VER) {
-        throw std::runtime_error("unsupported object file version");
-    }
-
+    if (header.mode > MODE_BE64)
+        throw std::runtime_error("unsupported object file mode");
     bool is_little_endian = (header.mode == MODE_LE32 || header.mode == MODE_LE64);
     bool is_64 = (header.mode == MODE_LE64 || header.mode == MODE_BE64);
 
+    auto read_u16 = [&](std::istream& input) -> uint16_t {
+        return is_little_endian ? read_little_endian<uint16_t>(input)
+                                : read_big_endian<uint16_t>(input);
+    };
+    auto read_u32 = [&](std::istream& input) -> uint32_t {
+        return is_little_endian ? read_little_endian<uint32_t>(input)
+                                : read_big_endian<uint32_t>(input);
+    };
     auto read_value = [&](std::istream& stream) -> uint64_t {
         if (is_little_endian) {
             if (!is_64) {
@@ -310,7 +314,11 @@ static vhxcc::object read_object_file(std::istream& stream) {
         }
     };
 
-    header.reserved = read_little_endian<uint32_t>(stream);
+    header.version = read_u16(stream);
+    header.arch = read_u32(stream);
+    header.reserved = read_u32(stream);
+    if (header.version != OBJ_VER)
+        throw std::runtime_error("unsupported object file version");
 
     header.file_len = read_value(stream);
     header.symbols_off = read_value(stream);
@@ -343,8 +351,8 @@ static vhxcc::object read_object_file(std::istream& stream) {
         sections.resize(header.sections_len / sizeof(section_header32));
     }
     for (std::size_t i = 0; i < sections.size(); i++) {
-        sections[i].index = read_little_endian<uint32_t>(stream);
-        sections[i].flags = read_little_endian<uint32_t>(stream);
+        sections[i].index = read_u32(stream);
+        sections[i].flags = read_u32(stream);
         sections[i].name_off = read_value(stream);
         sections[i].addr = read_value(stream);
         sections[i].data_off = read_value(stream);
@@ -360,8 +368,8 @@ static vhxcc::object read_object_file(std::istream& stream) {
         relocs.resize(header.relocs_len / sizeof(reloc_header32));
     }
     for (std::size_t i = 0; i < relocs.size(); i++) {
-        relocs[i].section_index = read_little_endian<uint32_t>(stream);
-        relocs[i].type = read_little_endian<uint32_t>(stream);
+        relocs[i].section_index = read_u32(stream);
+        relocs[i].type = read_u32(stream);
         relocs[i].symbol_name_off = read_value(stream);
         relocs[i].offset = read_value(stream);
         relocs[i].addend = read_value(stream);
@@ -375,8 +383,8 @@ static vhxcc::object read_object_file(std::istream& stream) {
         symbols.resize(header.symbols_len / sizeof(symbol_header32));
     }
     for (std::size_t i = 0; i < symbols.size(); i++) {
-        symbols[i].section_index = read_little_endian<uint32_t>(stream);
-        symbols[i].flags = read_little_endian<uint32_t>(stream);
+        symbols[i].section_index = read_u32(stream);
+        symbols[i].flags = read_u32(stream);
         symbols[i].name_off = read_value(stream);
         symbols[i].value = read_value(stream);
 
@@ -467,26 +475,34 @@ static vhxcc::object read_object_file(std::istream& stream) {
     return obj;
 }
 
-static std::ostream& write_object_file(std::ostream& stream, const vhxcc::object& obj) {
-    constexpr std::size_t pointer_bits = sizeof(void*) * CHAR_BIT;
-
-    bool is_little_endian = true;
-    bool is_64 = pointer_bits == 64;
-
+static std::ostream& write_object_file(std::ostream& stream, const vhxcc::object& obj,
+                                       bool is_64, bool big_endian) {
     auto write_value = [&](std::ostream& stream, uint64_t value) {
-        if (is_little_endian) {
-            if (is_64) {
-                write_little_endian<uint64_t>(stream, value);
-            } else {
-                write_little_endian<uint32_t>(stream, static_cast<uint32_t>(value));
-            }
-        } else {
-            if (is_64) {
+        if (!is_64 && value > std::numeric_limits<uint32_t>::max())
+            throw std::runtime_error("value exceeds VXO32 range");
+        if (big_endian) {
+            if (is_64)
                 write_big_endian<uint64_t>(stream, value);
-            } else {
+            else
                 write_big_endian<uint32_t>(stream, static_cast<uint32_t>(value));
-            }
+        } else {
+            if (is_64)
+                write_little_endian<uint64_t>(stream, value);
+            else
+                write_little_endian<uint32_t>(stream, static_cast<uint32_t>(value));
         }
+    };
+    auto write_u32 = [&](std::ostream& output, uint32_t value) {
+        if (big_endian)
+            write_big_endian<uint32_t>(output, value);
+        else
+            write_little_endian<uint32_t>(output, value);
+    };
+    auto write_u16 = [&](std::ostream& output, uint16_t value) {
+        if (big_endian)
+            write_big_endian<uint16_t>(output, value);
+        else
+            write_little_endian<uint16_t>(output, value);
     };
 
     std::unordered_map<std::string, std::size_t> string_cache;
@@ -587,11 +603,13 @@ static std::ostream& write_object_file(std::ostream& stream, const vhxcc::object
 
     // begin writing the object file to the stream
     stream.write(reinterpret_cast<const char*>(&MAGIC), 4);
-    write_little_endian<uint8_t>(stream, is_64 ? MODE_LE64 : MODE_LE32);
+    write_little_endian<uint8_t>(stream, is_64
+        ? (big_endian ? MODE_BE64 : MODE_LE64)
+        : (big_endian ? MODE_BE32 : MODE_LE32));
     write_little_endian<uint8_t>(stream, string_to_platform(obj.platform()));
-    write_little_endian<uint16_t>(stream, OBJ_VER);
-    write_little_endian<uint32_t>(stream, string_to_arch(obj.arch()));
-    write_little_endian<uint32_t>(stream, 0); // reserved
+    write_u16(stream, OBJ_VER);
+    write_u32(stream, string_to_arch(obj.arch()));
+    write_u32(stream, 0); // reserved
 
     // file_len
     write_value(stream, total_size);
@@ -615,15 +633,15 @@ static std::ostream& write_object_file(std::ostream& stream, const vhxcc::object
     write_value(stream, string_block_size);
 
     for (const auto& symbol_header : symbol_headers) {
-        write_little_endian<uint32_t>(stream, symbol_header.section_index);
-        write_little_endian<uint32_t>(stream, symbol_header.flags);
+        write_u32(stream, symbol_header.section_index);
+        write_u32(stream, symbol_header.flags);
         write_value(stream, symbol_header.name_off);
         write_value(stream, symbol_header.value);
     }
 
     for (const auto& section_header : section_headers) {
-        write_little_endian<uint32_t>(stream, section_header.index);
-        write_little_endian<uint32_t>(stream, section_header.flags);
+        write_u32(stream, section_header.index);
+        write_u32(stream, section_header.flags);
         write_value(stream, section_header.name_off);
         write_value(stream, section_header.addr);
         write_value(stream, data_off + section_header.data_off);
@@ -632,8 +650,8 @@ static std::ostream& write_object_file(std::ostream& stream, const vhxcc::object
     }
 
     for (const auto& reloc_header : reloc_headers) {
-        write_little_endian<uint32_t>(stream, reloc_header.section_index);
-        write_little_endian<uint32_t>(stream, reloc_header.type);
+        write_u32(stream, reloc_header.section_index);
+        write_u32(stream, reloc_header.type);
         write_value(stream, reloc_header.symbol_name_off);
         write_value(stream, reloc_header.offset);
         write_value(stream, reloc_header.addend);
@@ -656,7 +674,13 @@ vhxcc::object::object(std::istream& stream) {
 }
 
 vhxcc::object& vhxcc::object::write(std::ostream& stream) {
-    write_object_file(stream, *this);
+    constexpr std::size_t pointer_bits = sizeof(void*) * CHAR_BIT;
+    write_object_file(stream, *this, pointer_bits == 64, false);
+    return *this;
+}
+
+vhxcc::object& vhxcc::object::write(std::ostream& stream, bool is_64, bool big_endian) {
+    write_object_file(stream, *this, is_64, big_endian);
     return *this;
 }
 
@@ -671,6 +695,7 @@ vhxcc::object& vhxcc::object::operator<<(std::istream& stream) {
 }
 
 std::ostream& vhxcc::object::operator>>(std::ostream& stream) {
-    write_object_file(stream, *this);
+    constexpr std::size_t pointer_bits = sizeof(void*) * CHAR_BIT;
+    write_object_file(stream, *this, pointer_bits == 64, false);
     return stream;
 }
