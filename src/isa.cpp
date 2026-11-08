@@ -258,7 +258,7 @@ static encode_result query_la(const std::string& mneumonic) {
 
 static encode_result query_brl(const std::string& mneumonic) {
     encode_result res;
-    res.is_valid = mneumonic == "brl";
+    res.is_valid = mneumonic == "brl" || mneumonic == "br";
     res.can_relax = false;
     res.relax = 0;
     res.mneumonic = mneumonic;
@@ -316,6 +316,20 @@ static encode_result query_extend(const std::string& mneumonic) {
     res.size = 4;
     return res;
 }
+
+static encode_result query_conditional_branch(const std::string& mneumonic) {
+    static const std::unordered_set<std::string> names = {
+        "breq", "brne", "brlt", "brle", "brlo", "brls", "brtz", "brnt", "brez", "brnz", "brlz", "brlez", "brgz", "brgez"
+    };
+    encode_result res;
+    res.is_valid = names.contains(mneumonic);
+    res.can_relax = false;
+    res.relax = 0;
+    res.mneumonic = mneumonic;
+    res.size = 4;
+    return res;
+}
+
 // ==================================================================================
 // encoders
 // ==================================================================================
@@ -621,8 +635,8 @@ static encode_result encode_li(const std::string &mneumonic, const std::vector<v
         switch (relax) {
             case 0: {
                 res.bytes = _mv(rd, operand("zer"));
-                res.is_valid = true;
-                for (unsigned chunk = 0; chunk < 4; ++chunk) {
+                res.is_valid = val.constant <= 0xffffffffffffffffull;
+                for (unsigned chunk = 0; chunk < 4; chunk++) {
                     const uint64_t value = val.constant & (uint64_t{0xffff} << (chunk * 16));
                     if (value == 0)
                         continue;
@@ -639,8 +653,8 @@ static encode_result encode_li(const std::string &mneumonic, const std::vector<v
             } break;
             case 1: {
                 res.bytes = _mv(rd, operand("zer"));
-                res.is_valid = true;
-                for (unsigned chunk = 0; chunk < 2; ++chunk) {
+                res.is_valid = val.constant <= 0xffffffffull;
+                for (unsigned chunk = 0; chunk < 2; chunk++) {
                     const uint64_t value = val.constant & (uint64_t{0xffff} << (chunk * 16));
                     if (value == 0)
                         continue;
@@ -654,7 +668,12 @@ static encode_result encode_li(const std::string &mneumonic, const std::vector<v
                     res.bytes.insert(res.bytes.end(), encoded.begin(), encoded.end());
                 }
                 res.can_relax = true;
-            }
+            } break;
+            case 2: {
+                res.is_valid = ((int64_t)val.constant < 2048) && ((int64_t)val.constant >= -2048);
+                res.bytes = _addi(rd, operand("zer"), val);
+                res.can_relax = false;
+            } break;
         }
     }
     res.size = res.bytes.size();
@@ -674,6 +693,7 @@ static encode_result encode_la(const std::string& mneumonic,
     const std::size_t count = reduce_operands(operands, rd, symbol);
     res.is_valid = count == 2 && rd.type == operand::_register &&
                    symbol.type == operand::_symbol;
+    res.size = 0;
     if (!res.is_valid)
         return res;
 
@@ -687,7 +707,7 @@ static encode_result encode_la(const std::string& mneumonic,
         const std::size_t chunks =
             mneumonic == "la32" || relax == 1 ? 2 : 4;
         res.bytes = pack((rd.index << 6) | (1U << 16), 4);
-        for (std::size_t chunk = 0; chunk < chunks; ++chunk) {
+        for (std::size_t chunk = 0; chunk < chunks; chunk++) {
             const uint32_t word = 0x0bU | (rd.index << 6) |
                                 (static_cast<uint32_t>(chunk) << 11);
             const std::size_t offset = res.bytes.size();
@@ -697,9 +717,10 @@ static encode_result encode_la(const std::string& mneumonic,
         }
         res.can_relax = true;
     } else if (relax == pc_relative_level && rd.index == 31) {
-        res.bytes = _addi(operand("pc"), operand("pc"), operand(0));
+        res.bytes = _addi(rd, operand("pc"), operand(0));
         res.size = res.bytes.size();
         res.relocations.emplace_back(relocation::vhx_pc12, symbol.symbol, 0);
+        res.can_relax = false;
     } else {
         res.is_valid = false;
         return res;
@@ -736,6 +757,41 @@ static encode_result encode_brl(const std::string& mneumonic,
         return res;
 
     const std::vector<char> call = _swp(operand("pc"), operand("ra"), operand("pc"));
+    res.bytes = std::move(address.bytes);
+    res.relocations = std::move(address.relocations);
+    res.bytes.insert(res.bytes.end(), call.begin(), call.end());
+    res.size = res.bytes.size();
+    res.is_valid = true;
+    return res;
+}
+
+static encode_result encode_br(const std::string& mneumonic,
+                                const std::vector<vhxcc::parser::expression>& operands,
+                                std::size_t pointer, int relax) {
+    (void)pointer;
+    (void)relax;
+    encode_result res;
+    res.mneumonic = mneumonic;
+    res.can_relax = false;
+    res.relax = 0;
+    res.size = 24;
+    res.is_valid = false;
+
+    operand target;
+    if (reduce_operands(operands, target) != 1 || target.type != operand::_symbol)
+        return res;
+
+    parser::expression link_address{
+        parser::expression::identifier,
+        token(token::identifier, "lp", operands.front().token.pos()),
+        {}
+    };
+    encode_result address = encode_la(
+        "la", {link_address, operands.front()}, pointer, 0);
+    if (!address.is_valid || address.bytes.size() != 20)
+        return res;
+
+    const std::vector<char> call = _mv(operand("pc"), operand("lp"));
     res.bytes = std::move(address.bytes);
     res.relocations = std::move(address.relocations);
     res.bytes.insert(res.bytes.end(), call.begin(), call.end());
@@ -881,6 +937,7 @@ static const std::unordered_map<std::string, encoder_fn> encoder_map = {
     {"bl", encode_alu_rrr},
     {"brlr", encode_alu_rrr},
     {"brl", encode_brl},
+    {"br", encode_br},
     {"nop", encode_alu_rrr},
     {"sub", encode_alu_rrr},
     {"or", encode_alu_rrr},
@@ -938,6 +995,7 @@ static const std::unordered_map<std::string, query_fn> query_map = {
     {"bl", query_basic},
     {"brlr", query_basic},
     {"brl", query_brl},
+    {"br", query_brl},
     {"nop", query_basic},
     {"sub", query_basic},
     {"or", query_basic},
