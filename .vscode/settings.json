@@ -3,7 +3,6 @@
         "-std=c++26",
         "-I${workspaceFolder}/include",
         "-Wall",
-        "-Wextra",
-        "-Wpedantic"
+        "-Wextra"
     ],
 }

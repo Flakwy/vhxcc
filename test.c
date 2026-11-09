@@ -1,6 +1,4 @@
 
-extern int test();
-
 static int fib(int i) {
     if (i == 0)
         return 1;
@@ -8,5 +6,5 @@ static int fib(int i) {
 }
 
 int main() {
-    return fib(0) + test();
+    return fib(16)*fib(15);
 }

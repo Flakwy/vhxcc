@@ -319,7 +319,7 @@ static encode_result query_extend(const std::string& mneumonic) {
 
 static encode_result query_conditional_branch(const std::string& mneumonic) {
     static const std::unordered_set<std::string> names = {
-        "breq", "brne", "brlt", "brle", "brlo", "brls", "brtz", "brnt", "brez", "brnz", "brlz", "brlez", "brgz", "brgez"
+        "breq", "brne", "brlt", "brle", "brlo", "brls", "brtz", "brnt", "breqz", "brnez", "brltz", "brlez", "brgtz", "brgez"
     };
     encode_result res;
     res.is_valid = names.contains(mneumonic);

@@ -12,63 +12,7 @@ namespace vhxcc {
 class parser {
 public:
 
-    class typenames {
-    private:
-        std::unordered_set<std::string> _global;
-        std::unordered_map<std::string, std::unordered_set<std::string>> _namespaces;
-
-    public:
-        typenames() {
-            _global.insert("int");
-            _global.insert("char");
-            _global.insert("float");
-            _global.insert("double");
-            _global.insert("_Bool");
-
-            // some non-standard C types I'm gonna add
-            _global.insert("byte");
-
-            _namespaces["struct"];
-            _namespaces["union"];
-            _namespaces["enum"];
-        }
-
-        void insert(const std::string& _typename) {
-            _global.insert(_typename);
-        }
-
-        void insert(const std::string& _namespace, const std::string& _typename) {
-            if (!_namespaces.contains(_namespace))
-                throw vhxcc::compile_error(std::format("unknown namespace '{}'", _namespace));
-            _namespaces.at(_namespace).insert(_typename);
-        }
-
-        const std::unordered_set<std::string>& globals() const {
-            return _global;
-        }
-
-        const std::unordered_set<std::string>& structs() const {
-            return _namespaces.at("struct");
-        }
-
-        const std::unordered_set<std::string>& unions() const {
-            return _namespaces.at("union");
-        }
-
-        const std::unordered_set<std::string>& enums() const {
-            return _namespaces.at("enum");
-        }
-
-        bool contains(const std::string& _typename) const {
-            return _global.contains(_typename);
-        }
-
-        bool contains(const std::string& _namespace, const std::string& _typename) const {
-            if (!_namespaces.contains(_namespace))
-                throw vhxcc::compile_error(std::format("unknown namespace '{}'", _namespace));
-            return _namespaces.at(_namespace).contains(_typename);
-        }
-    };
+    using typenames = std::unordered_set<std::string>;
 
     struct expression {
         enum type {
@@ -517,19 +461,9 @@ private:
             return (token == token::identifier) && (token == "short" || token == "long" || token == "signed" || token == "unsigned");
         };
 
-        static auto is_namespace = [](const token& token) -> bool {
-            return (token == token::identifier) && (token == "struct" || token == "union" || token == "enum");
-        };
-
         static auto is_typename = [](const parser::typenames& typenames) {
             return [&](const token& token) -> bool {
-                return (token == token::identifier) && typenames.contains(token.lexeme());
-            };
-        };
-
-        static auto is_typename_namespace = [](const std::string& _namespace, const parser::typenames& typenames) {
-            return [&](const token& token) -> bool {
-                return (token == token::identifier) && typenames.contains(_namespace, token.lexeme());
+                return (token == token::identifier) && (typenames.contains(token.lexeme()) || token.lexeme() == "stuct" || token.lexeme() == "union" || token.lexeme() == "enum");
             };
         };
 
@@ -552,25 +486,7 @@ private:
                 valid = true;
         }
 
-        if (token tok = lexer::match(it, is_namespace)) {
-            expression node;
-            node.type = expression::identifier;
-            node.token = tok;
-
-            auto _is_typename_namespace = is_typename_namespace(tok.lexeme(), typenames);
-
-            if (token _tok = lexer::match(it, _is_typename_namespace)) {
-                expression _node;
-                _node.type = expression::identifier;
-                _node.token = _tok;
-                node.branches.push_back(std::move(_node));
-            } else {
-                it = old;
-                return parser::none;
-            }
-
-            type_val.branches.push_back(std::move(node));
-        } else if (token tok = lexer::match(it, _is_typename)) {
+        if (token tok = lexer::match(it, _is_typename)) {
             expression node;
             node.type = expression::identifier;
             node.token = tok;
